@@ -28,6 +28,8 @@ A one-click installer, a launcher that sets everything up for you, and seamless 
 > Studios and PLAION; this is a free, non-commercial fan project.
 
 
+> **Modified version, not the official one.** This fork adds fixed figure souls (`docs/FIXED-SOULS.md`). The official repository is https://github.com/DeepFriedDepp/KingdomCome-Together. Please report problems with this fork here, not to the official project.
+
 ## Contents
 
 - [Features](#features)

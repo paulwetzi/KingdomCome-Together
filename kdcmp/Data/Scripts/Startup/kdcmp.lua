@@ -7210,6 +7210,7 @@ function KCD2MP_W136ClearPreset(id, why)
     local g = KCD2MP.ghosts and KCD2MP.ghosts[tostring(id)]
     local e = g and g.entity
     if not (e and e.actor) then mp_log("WO136-OUTFIT clear id=" .. tostring(id) .. " -- no avatar"); return false end
+    if g.fixedLook then return false end   -- modified build: the empty preset would strip the fixed soul's own outfit
     local ok, err = pcall(function() e.actor:EquipClothingPreset(KCD2MP.w136.PRESET_BARE) end)
     mp_log(string.format("WO136-OUTFIT clear id=%s why=%s ok=%s%s -- the spawn preset is off; only the partner's own items are worn",
         tostring(id), tostring(why), tostring(ok), ok and "" or (" err=" .. tostring(err))))
@@ -10696,6 +10697,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
     -- waiting on the name.
     local faceKey = identity or ("Player" .. tostring(id))
     local facePick = KCD2MP_PickFigureFace(faceKey)   -- WO-177 A1: a soul of the mod's own (mp_figure_soul off: the village roster)
+    local fixedLook = facePick.fixedLook == true      -- modified build: keeps the soul's own outfit, even on the male fallback body
 
     -- WO-27: an entity may still be standing under this exact spawn name with
     -- no KCD2MP.ghosts row behind it -- after a save load, after the mod
@@ -10949,7 +10951,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
     -- confirmed live). So the preset call is actively destructive on a
     -- female-classed ghost, not merely ineffective -- skip it for her and
     -- let the soul's own authored outfit stand. The male path is unchanged.
-    if facePick.className ~= "NPC_Female" then
+    if facePick.className ~= "NPC_Female" and not fixedLook then
         local p = KCD2MP.armorPresets.white_red
         -- WO-136 Phase 5: the avatar spawns bare (the empty preset takes the
         -- soul's own authored outfit off too); the partner's real items arrive
@@ -11032,6 +11034,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
         -- name still arms the reconnect dedupe for the NEXT reconnect.
         identity = identity,
         spawnName = name,
+        fixedLook = fixedLook,
     }
 
     -- WO-46: report the ghost's raw CryEngine entity id to the agent, which
@@ -15223,10 +15226,40 @@ end
 
 -- The face of a partner's figure: one of the twelve mod souls by the partner's name (the same one every time, like the old roster).
 function KCD2MP_PickFigureFace(nameKey)
+    local fixed = KCD2MP.fixedSouls and KCD2MP.fixedSouls[tostring(nameKey or "")]
+    if fixed then return fixed end
     if not KCD2MP.w177.figureSoul then return KCD2MP_PickFaceForPlayer(nameKey) end
     local h = KCD2MP_HashString(tostring(nameKey or ""))
     local list = KCD2MP.w177.figureEnemies and KCD2MP.partnerSouls or KCD2MP.partnerSoulsNeutral
     return list[(math.floor(h / 2) % #list) + 1]
+end
+
+-- Modified build (not the official project): the agent maps a player's name to a fixed female soul (fixed-souls.json beside it).
+-- A figure already standing under that name with another soul is removed; the next position packet respawns it with this one.
+KCD2MP.fixedSouls = KCD2MP.fixedSouls or {}
+function KCD2MP_SetFixedSoul(name, soulName, guid)
+    name = tostring(name or "")
+    if name == "" or not soulName or not guid then return false end
+    local cur = KCD2MP.fixedSouls[name]
+    if cur and cur.guid == guid then return false end
+    KCD2MP.fixedSouls[name] = { className = "NPC_Female", soulName = soulName, guid = guid, fixedLook = true }
+    local doomed = {}
+    for id, g in pairs(KCD2MP.ghosts or {}) do
+        if (KCD2MP.ghostNames[id] == name or g.identity == name) and not (g.facePick and g.facePick.guid == guid) then
+            doomed[#doomed + 1] = id
+        end
+    end
+    for _, id in ipairs(doomed) do KCD2MP_RemoveGhost(id) end
+    mp_log(string.format("FIXED-SOUL soul=%s guid=%s respawned=%d", tostring(soulName), tostring(guid), #doomed))
+    return true
+end
+
+function KCD2MP_IsFixedLookEntity(e)
+    if not e then return false end
+    for _, g in pairs(KCD2MP.ghosts or {}) do
+        if g.entity == e then return g.fixedLook == true end
+    end
+    return false
 end
 
 function KCD2MP_W177SetFigureSoul(arg)
@@ -16988,7 +17021,7 @@ function W134.applyList(e, want)
         for _, hi in ipairs(W134.items(e)) do before[tostring(hi.w)] = true end
         pcall(function() e.inventory:CreateItem(wi.cls, wi.hp, wi.amt) end)
         made = made + 1
-        if wi.worn then
+        if wi.worn and not KCD2MP_IsFixedLookEntity(e) then
             for _, hi in ipairs(W134.items(e)) do
                 if not before[tostring(hi.w)] and hi.cls == wi.cls then
                     pcall(function() e.actor:EquipInventoryItem(hi.w) end)
@@ -17980,6 +18013,7 @@ function KCD2MP_W144Equip(name, cls)
     name, cls = tostring(name), tostring(cls)
     local e = System.GetEntityByName(name)
     if not (e and e.inventory and e.actor) then mp_log("WO144-DRESS " .. name .. " " .. cls .. " -- no avatar"); return false end
+    if KCD2MP_IsFixedLookEntity(e) then return false end   -- modified build: she keeps the soul's own outfit
     if w.lights and w.LIGHTS[cls] then return false end   -- a light is the torch sync's, never an outfit piece
     local it, how = nil, "own"
     pcall(function() it = e.inventory:FindItem(cls) end)

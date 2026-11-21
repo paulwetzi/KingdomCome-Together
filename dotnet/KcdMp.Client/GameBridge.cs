@@ -2042,8 +2042,11 @@ public partial class GameBridge(ClientConfig config)
                         // costs a stamp comparison on the same cadence as
                         // the other re-arms.
                         foreach (var kv in _ghostNames.Where(kv => IsLivePeer(kv.Key)))   // WO-144: never a gone peer's name
+                        {
+                            await PushFixedSoulAsync(kv.Value);   // modified build: a restarted game's Lua lost the mapping too
                             await ExecLuaAsync(
                                 $"if KCD2MP_SetGhostName then KCD2MP_SetGhostName(\"{kv.Key}\", \"{EscapeLua(kv.Value)}\") end");
+                        }
                         // WO-94: level and current main quest survive in the
                         // agent but not in a restarted game's Lua; re-push
                         // them on the same cadence (idempotent in Lua).
@@ -2886,6 +2889,7 @@ public partial class GameBridge(ClientConfig config)
         lock (unwearable) unwearable.OnTarget(targetSet);
         // What the peer wears (the swing catalog resolves its weapon from this).
         lock (applied) { applied.Clear(); applied.UnionWith(targetSet); }
+        if (IsFixedLook(ghostId)) return;   // modified build: a fixed female soul keeps her own outfit; nothing is put on or taken off
 
         await Wo201FigurePropCheckAsync(ghostId, targetSet);   // WO-201 B11: a shown weapon prop goes when the partner no longer has it
         await Wo144EnsureLiveSoulAsync(ghostId);   // WO-144 2.1: reads and writes go to the live avatar's own soul
@@ -5751,6 +5755,7 @@ public partial class GameBridge(ClientConfig config)
         var safeName = EscapeLua(ghostName);
         try
         {
+            await PushFixedSoulAsync(ghostName);   // modified build: before the name, so the spawn already uses it
             await ExecLuaAsync($@"KCD2MP_SetGhostName(""{ghostId}"",""{safeName}"")");
             Console.WriteLine($"[name] ghost {ghostId} = {ghostName}");
         }

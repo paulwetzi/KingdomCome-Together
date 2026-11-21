@@ -283,6 +283,7 @@ public partial class GameBridge
             if (!_w144Dress || _where is GameWhere.Menu or GameWhere.Loading) continue;
             foreach (var g in LivePartners())
             {
+                if (IsFixedLook(g)) continue;   // modified build: her own outfit is not the partner's, so nothing counts as missing
                 if (!_ghostWantedAppearance.TryGetValue(g, out var want)) continue;
                 var gate = _ghostApplyGate.GetOrAdd(g, static _ => new SemaphoreSlim(1, 1));
                 if (!await gate.WaitAsync(0, ct)) continue;   // an apply is running: it reads the real set itself
