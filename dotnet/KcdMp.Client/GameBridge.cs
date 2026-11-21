@@ -2044,6 +2044,7 @@ public partial class GameBridge(ClientConfig config)
                         foreach (var kv in _ghostNames.Where(kv => IsLivePeer(kv.Key)))   // WO-144: never a gone peer's name
                         {
                             await PushFixedSoulAsync(kv.Value);   // modified build: a restarted game's Lua lost the mapping too
+                            if (_ghostLooks.ContainsKey(kv.Key)) await PushGhostLookAsync(kv.Key);   // and the partner's chosen character
                             await ExecLuaAsync(
                                 $"if KCD2MP_SetGhostName then KCD2MP_SetGhostName(\"{kv.Key}\", \"{EscapeLua(kv.Value)}\") end");
                         }
@@ -6130,6 +6131,10 @@ public partial class GameBridge(ClientConfig config)
             case "w139_punish":
             case "w139_status":
                 Wo139OnEvent(name, arg);
+                return;
+            case "fig_list":         // modified build: the character window
+            case "fig_pick":
+                FigureOnEvent(name, arg);
                 return;
             case "w154_menu_set":    // WO-154 7b: a mod-menu choice to remember (mod-settings.json; MenuKey: settings.json)
             case "w154_menu_cfg":    // WO-154 7b: mp_fast_travel (the host's lever)

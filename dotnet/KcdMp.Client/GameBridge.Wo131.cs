@@ -243,11 +243,13 @@ public partial class GameBridge
     {
         // WO-178 C1b: with mp_figure_enemies (and mp_figure_soul) on, the figure keeps its own soul's faction -- the player's faction left it
         // neutral to bandits (their hostility to Henry is his personal reputation, not a relation of the faction he hangs from)
-        if (_w178FigureEnemies) return;
+        // Modified build: a chosen character has a real NPC's faction (a village, a garrison, bandits), so it always joins the player's.
+        if (_w178FigureEnemies && _ghostLooks.IsEmpty && _fixedSouls.Value.Count == 0) return;
         long now = W131NowMs();
         foreach (var key in _ghostEntityIds.Keys.ToArray())
         {
             if (!byte.TryParse(key, NumberStyles.Integer, CultureInfo.InvariantCulture, out byte gid)) continue;
+            if (_w178FigureEnemies && !IsFixedLook(gid)) continue;
             if (_w131FactionTriedMs.TryGetValue(key, out long tried) && now - tried < 10_000) continue;
             Guid? g = await ResolveGhostSoulGuidAsync(gid, ct);
             if (g is not Guid soul) continue;

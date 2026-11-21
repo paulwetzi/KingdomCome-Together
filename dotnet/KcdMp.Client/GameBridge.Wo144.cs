@@ -60,6 +60,7 @@ public partial class GameBridge
         bool fresh = _peers.Connected(id, name);
         Wo191ForgetSender(id, fresh ? "connected" : "named-again");   // WO-191 1a: a (re)launched agent starts a fresh order
         _w144DropTold.TryRemove(id, out _);
+        FigureOnPeerConnected();   // modified build: a partner who arrives hears this player's character at once
         var twins = _peers.SameName(id, name);
         if (fresh)
             Console.WriteLine($"MP-PEERS ghost {id} connected ({LivePartners().Count} partner(s) now){(twins.Count > 0 ? $" -- the same player as ghost {string.Join(",", twins)}: the relay replaces the old connection" : "")}");
@@ -88,6 +89,7 @@ public partial class GameBridge
     private void Wo144AfterPeerGone(byte id)
     {
         if (_w138HostId == id) Wo144ReleaseClock("host-gone");
+        FigureOnPeerGone(id);   // modified build
         _ghostNames.TryRemove(id, out _);
         _ghostReleaseVersions.TryRemove(id, out _);
         _modeTold.TryRemove(id, out _);
@@ -98,6 +100,7 @@ public partial class GameBridge
 
     private void Wo144OnRelayLost()
     {
+        FigureOnRelayLost();   // modified build
         _peers.Clear();
         _w144DropTold.Clear();
         Wo144ReleaseClock("relay-lost");

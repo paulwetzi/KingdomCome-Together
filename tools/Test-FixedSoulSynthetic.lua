@@ -104,6 +104,9 @@ local function mkent(name, cls)
         CreateItem = function() CREATED = CREATED + 1 end,
     }, { __index = function() return function() return nil end end })
     e.human = setmetatable({}, { __index = function() return function() return nil end end })
+    e.soul = setmetatable({}, { __index = function() return function() return nil end end })
+    e.SetWorldAngles = function(_, a) e.angles = a end
+    setmetatable(e, { __index = function() return function() return nil end end })
     e.GetName = function() return name end
     e.GetWorldPos = function() return { x = 1, y = 2, z = 3 } end
     e.GetCharacterFileName = function() return "humans/female/skeleton/female.chr" end
@@ -146,6 +149,102 @@ do
         and KCD2MP.ghosts["8"] == nil)
     check("F16: the figure already on its soul stays", KCD2MP.ghosts["9"] ~= nil)
     noErrs("F")
+end
+
+-- The character window, and the look a partner chose
+do
+    local M, L = KCD2MP.w154menu, KCD2MP.look
+    local G1 = "7ac037fe-60ca-4212-a39f-0093cff270ba"
+    local G2 = "00ec8c08-21d3-4f65-8c84-cf28958f0cde"
+    local function evt(name, arg, from) return countEvt(name, arg, from) end
+    local function page(node, title, rows)
+        KCD2MP_FigurePageBegin(node, title, "", #rows)
+        for _, r in ipairs(rows) do KCD2MP_FigureRow(node, r[1], r[2], r[3], r[4] or "", r[5] or "") end
+    end
+    local function key(verb) return KCD2MP_W154Menu(verb, "key") end
+    local function frame() M.menu.frameAt = NOW; M.draw() end
+    player.actor.IsUnconscious = function() return false end
+    player.human.IsMounted = function() return false end
+
+    KCD2MP_W154MenuSession("host", true, nil, nil, nil, "connected", "test", false, false)
+    check("W1: the menu opens", key("open") == true)
+    check("W2: the first item is the character window", M.ITEMS[1].id == "character" and M.menu.sel == 1)
+    local mark = #LOG
+    check("W3: End opens the window and asks for the list", key("change") == true and L.open == true and evt("fig_list", "root", mark) == 1)
+    check("W4: keys wait while the list loads", key("down") == true and L.sel == 1)
+    page("stale", "x", { { "n", "g0", "old" } })
+    check("W5: an answer for another page is ignored", L.waiting == true and #L.rows == 0)
+    page("root", "Charakter waehlen", { { "r", "none", "Standardfigur" }, { "n", "g0", "Frauen (2)" } })
+    check("W6: the page arrives", L.waiting == false and #L.rows == 2 and L.sel == 1)
+    frame()
+    check("W7: PgDn moves, and wraps at the end", key("down") and L.sel == 2 and key("down") and L.sel == 1 and key("up") and L.sel == 2)
+    mark = #LOG
+    key("change")
+    check("W8: End on a group asks for it", evt("fig_list", "g0", mark) == 1 and L.waiting == true)
+    page("g0", "Frauen", { { "b", "root", "< Zurueck" }, { "s", "ttkc_woman_9", "Magd 9", G1, "NPC_Female" }, { "s", "tvez_woman_3", "Frau 3 (!)", G2, "NPC_Female" } })
+    check("W9: a page starts on its first entry, not on Back", L.sel == 2)
+
+    local before = #SPAWNS
+    frame()
+    check("W10: no preview before the short delay", #SPAWNS == before)
+    NOW = NOW + 1
+    frame()
+    local s = SPAWNS[#SPAWNS]
+    check("W11: the preview stands in front of the player", #SPAWNS == before + 1 and s.Name:find("^kcd2mp_preview_") ~= nil and s.SharedSoulGuid == G1 and s.Pos[1] > PX)
+    check("W12: the preview counts as the mod's own body", L.previewEnt ~= nil and KCD2MP_W139IsAvatar(L.previewEnt) == false and L.previewGuid == G1)
+    frame()
+    check("W13: the same entry is not spawned twice", #SPAWNS == before + 1)
+    key("down")
+    NOW = NOW + 1
+    frame()
+    check("W14: the next entry replaces the preview, under a new name", #SPAWNS == before + 2 and SPAWNS[#SPAWNS].SharedSoulGuid == G2 and SPAWNS[#SPAWNS].Name ~= s.Name)
+
+    P_DANGER = true
+    mark = #LOG
+    key("change")
+    check("W15: not during a fight", evt("fig_pick", "", mark) == 0 and tostring(L.note):find("Kampf", 1, true) ~= nil)
+    P_DANGER = false
+    mark = #LOG
+    key("change")
+    check("W16: End chooses the character", evt("fig_pick", "tvez_woman_3", mark) == 1)
+    KCD2MP_FigureCurrent("tvez_woman_3", "Frau 3", true)
+    check("W17: the player is told", L.cur == "tvez_woman_3" and tostring(L.note):find("Frau 3", 1, true) ~= nil)
+    frame()
+
+    key("toggle")
+    check("W18: the menu key closes the window and the menu", L.open == false and M.menu.open == false)
+    check("W19: the preview goes with it", L.previewEnt == nil and L.previewGuid == nil)
+
+    -- the partner's choice on this machine
+    KCD2MP.ghostNames["7"] = "Partner"
+    KCD2MP_SpawnGhost("7", 12, 22, 32, 0)
+    local male = KCD2MP.ghosts["7"]
+    check("P1: without a choice the figure is the mod's own", male.facePick.mod == true and male.fixedLook == false)
+    check("P2: the partner's choice is taken", KCD2MP_SetFigureLook("7", "ttkc_woman_9", G1, "NPC_Female", false) == true)
+    check("P3: the old body is removed for the respawn", KCD2MP.ghosts["7"] == nil)
+    check("P4: the same choice again changes nothing", KCD2MP_SetFigureLook("7", "ttkc_woman_9", G1, "NPC_Female", false) == false)
+    PRESETS = 0
+    KCD2MP_SpawnGhost("7", 12, 22, 32, 0)
+    check("P5: the respawn wears the chosen soul", SPAWNS[#SPAWNS].SharedSoulGuid == G1 and SPAWNS[#SPAWNS].ClassName == "NPC_Female")
+    check("P6: her clothes stay", PRESETS == 0 and KCD2MP.ghosts["7"].fixedLook == true and KCD2MP_W144Equip("kcd2mp_7", "x") == false)
+    check("P7: a class that is no human is refused", KCD2MP_SetFigureLook("6", "x", G2, "Horse", false) == false and KCD2MP.figureLooks["6"] == nil)
+
+    KCD2MP_SetFigureLook("7", "ttac_man_8", "fd1af8c5-c500-4add-b0b6-6c0505fe80c2", "NPC", true)
+    local weapons, clothes = 0, 0
+    local cmdMark = #CMDS
+    KCD2MP_SpawnGhost("7", 12, 22, 32, 0)
+    ENTS["kcd2mp_7"].actor.EquipClothingPreset = function() clothes = clothes + 1 end
+    runTimers()
+    local paused = false
+    for i = cmdMark + 1, #CMDS do if CMDS[i] == "wh_ai_PauseNPC kcd2mp_7" then paused = true end end
+    check("P8: a calm figure does not act on its own", paused)
+    check("P9: a male character keeps his clothes", clothes == 0 and KCD2MP.ghosts["7"].fixedLook == true)
+
+    check("P10: back to standard", KCD2MP_SetFigureLook("7", "", "", "", false) == true and KCD2MP.figureLooks["7"] == nil and KCD2MP.ghosts["7"] == nil)
+    KCD2MP_SpawnGhost("7", 12, 22, 32, 0)
+    check("P11: the standard figure is back and is dressed by the sync again", KCD2MP.ghosts["7"].facePick.mod == true and KCD2MP.ghosts["7"].fixedLook == false)
+    check("P12: clearing twice changes nothing", KCD2MP_SetFigureLook("7", "", "", "", false) == false)
+    noErrs("W/P")
 end
 
 OUT = table.concat(RESULTS, "\n")

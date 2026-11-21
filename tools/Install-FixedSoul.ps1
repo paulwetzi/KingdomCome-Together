@@ -93,6 +93,6 @@ if ($PlayerName) {
     [IO.File]::WriteAllText((Join-Path $InstallDir 'fixed-souls.json'), $json, (New-Object Text.UTF8Encoding($false)))
     Write-Host "Mapping written: $Soul" -ForegroundColor Green
 } elseif (-not (Test-Path (Join-Path $InstallDir 'fixed-souls.json'))) {
-    Write-Host 'No mapping yet: run this again with -PlayerName and -Soul.' -ForegroundColor Yellow
+    Write-Host 'Im Spiel: Einfg druecken, dann Charakter wechseln.' -ForegroundColor Cyan
 }
 Write-Host "Installed into $InstallDir and $ModDir" -ForegroundColor Green

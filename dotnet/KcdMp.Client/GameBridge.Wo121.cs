@@ -361,6 +361,9 @@ public partial class GameBridge
             case ActionKind.DoorAsk:
                 await Wo151OnDoorInAsync(a);   // WO-151 3.9: never stale-dropped (a door's state is not a moment)
                 return true;
+            case ActionKind.FigureLook:
+                await FigureOnActionAsync(a);   // modified build: the character the partner chose
+                return true;
             case ActionKind.SessionSetting:
                 if (a.Payload.Length >= 2 && a.Payload[0] == SessionSettingKey.FriendlyFire)
                 {

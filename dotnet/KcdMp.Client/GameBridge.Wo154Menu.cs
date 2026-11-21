@@ -107,6 +107,7 @@ public partial class GameBridge
             try { await Task.Delay(1000, ct); } catch { return; }
             try
             {
+                await FigureTickAsync();   // modified build: the chosen character reaches the partner
                 if (Environment.TickCount64 - lastStats >= 60_000)
                 {
                     lastStats = Environment.TickCount64;

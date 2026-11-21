@@ -4950,6 +4950,7 @@ end
 -- renames ghost entities to the player's nick (WO-26), so a name prefix
 -- test would miss every renamed ghost.
 local function mp_is_mod_entity(e)
+    if KCD2MP.look and KCD2MP.look.previewEnt == e and e ~= nil then return true end   -- modified build: the character preview
     for _, g in pairs(KCD2MP.ghosts) do
         if g.entity == e then return true end
     end
@@ -10696,7 +10697,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
     -- string the nameplate itself falls back to so a spawn is never blocked
     -- waiting on the name.
     local faceKey = identity or ("Player" .. tostring(id))
-    local facePick = KCD2MP_PickFigureFace(faceKey)   -- WO-177 A1: a soul of the mod's own (mp_figure_soul off: the village roster)
+    local facePick = KCD2MP_FacePickFor(id, faceKey)   -- modified build: the partner's chosen character first; WO-177 A1: a soul of the mod's own (mp_figure_soul off: the village roster)
     local fixedLook = facePick.fixedLook == true      -- modified build: keeps the soul's own outfit, even on the male fallback body
 
     -- WO-27: an entity may still be standing under this exact spawn name with
@@ -10951,7 +10952,7 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
     -- confirmed live). So the preset call is actively destructive on a
     -- female-classed ghost, not merely ineffective -- skip it for her and
     -- let the soul's own authored outfit stand. The male path is unchanged.
-    if facePick.className ~= "NPC_Female" and not fixedLook then
+    if facePick.className ~= "NPC_Female" then
         local p = KCD2MP.armorPresets.white_red
         -- WO-136 Phase 5: the avatar spawns bare (the empty preset takes the
         -- soul's own authored outfit off too); the partner's real items arrive
@@ -10959,9 +10960,14 @@ function KCD2MP_SpawnGhost(id, x, y, z, rotZ)
         -- not inventory items and could never be taken off (the field's
         -- "guard armour"). The weapon preset stays: a drawable weapon for the
         -- swing path until the partner's own weapon is equipped.
-        local okBare = pcall(function() entity.actor:EquipClothingPreset(KCD2MP.w136.PRESET_BARE) end)
-        mp_log(string.format("WO136-OUTFIT spawn ghost '%s': bare preset ok=%s -- it wears only the partner's own items from here", tostring(id), tostring(okBare)))
+        if not fixedLook then   -- modified build: a chosen character keeps the NPC's own clothes (a male one still gets the drawable weapon below)
+            local okBare = pcall(function() entity.actor:EquipClothingPreset(KCD2MP.w136.PRESET_BARE) end)
+            mp_log(string.format("WO136-OUTFIT spawn ghost '%s': bare preset ok=%s -- it wears only the partner's own items from here", tostring(id), tostring(okBare)))
+        end
         pcall(function() entity.actor:EquipWeaponPreset(p.weapons) end)
+    end
+    if facePick.calm then   -- modified build: a story figure, guard or enemy as a player's character does not act on its own
+        Script.SetTimer(1200, function() pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. name) end)
     end
     local ghostName = name
     Script.SetTimer(800, function()
@@ -11150,7 +11156,7 @@ function KCD2MP_SetGhostName(id, name)
     -- remove the mispicked body; the next position packet respawns it
     -- through the normal path, which now has the name.
     if ghost and ghost.entity and ghost.identity == nil then
-        local rightPick = KCD2MP_PickFigureFace(name)
+        local rightPick = KCD2MP_FacePickFor(id, name)
         local current = ghost.facePick
         if not current or current.soulName ~= rightPick.soulName
            or current.className ~= rightPick.className then
@@ -15245,12 +15251,36 @@ function KCD2MP_SetFixedSoul(name, soulName, guid)
     KCD2MP.fixedSouls[name] = { className = "NPC_Female", soulName = soulName, guid = guid, fixedLook = true }
     local doomed = {}
     for id, g in pairs(KCD2MP.ghosts or {}) do
-        if (KCD2MP.ghostNames[id] == name or g.identity == name) and not (g.facePick and g.facePick.guid == guid) then
+        if (KCD2MP.ghostNames[id] == name or g.identity == name) and not (g.facePick and g.facePick.guid == guid)
+           and not KCD2MP.figureLooks[id] then
             doomed[#doomed + 1] = id
         end
     end
     for _, id in ipairs(doomed) do KCD2MP_RemoveGhost(id) end
     mp_log(string.format("FIXED-SOUL soul=%s guid=%s respawned=%d", tostring(soulName), tostring(guid), #doomed))
+    return true
+end
+
+-- Modified build: the character a partner chose for himself (the agent, from the partner's FigureLook action). It wins over the file's mapping.
+KCD2MP.figureLooks = KCD2MP.figureLooks or {}
+function KCD2MP_FacePickFor(id, nameKey)
+    return KCD2MP.figureLooks[tostring(id)] or KCD2MP_PickFigureFace(nameKey)
+end
+
+function KCD2MP_SetFigureLook(id, soulName, guid, className, calm)
+    id = tostring(id)
+    local cur = KCD2MP.figureLooks[id]
+    if tostring(guid or "") == "" then
+        if not cur then return false end
+        KCD2MP.figureLooks[id] = nil
+    else
+        if cur and cur.guid == guid then return false end
+        if className ~= "NPC" and className ~= "NPC_Female" then return false end
+        KCD2MP.figureLooks[id] = { className = className, soulName = soulName, guid = guid, fixedLook = true, calm = calm == true }
+    end
+    local g = KCD2MP.ghosts[id]
+    if g then KCD2MP_RemoveGhost(id) end   -- the next position packet respawns the figure with the new look
+    mp_log(string.format("FIGURE ghost %s look=%s respawn=%s", id, tostring(KCD2MP.figureLooks[id] and soulName or "standard"), tostring(g ~= nil)))
     return true
 end
 
@@ -27910,6 +27940,8 @@ do
     -- kind: onoff | crime (joint/individual) | voice | menukey | action | info. host = the host's lever.
     -- fn = the function the console command's template names (the menu calls exactly that).
     M.ITEMS = {
+        { id = "character", group = "Charakter", label = "Charakter wechseln", kind = "action", cmd = "mp_character", fn = "KCD2MP_LookOpen",
+          help = "Waehle aus allen NPCs, wie dich dein Partner sieht. Vor dir steht eine Vorschau." },
         { id = "name_badges", group = "Display", label = "Partner's name badge", kind = "onoff", save = "NameBadges",
           cmd = "mp_name_badges", fn = "KCD2MP_W154SetNameBadges", get = function() return M.nameBadges end,
           help = "Shows your partner's name (and health) above their figure." },
@@ -28201,6 +28233,7 @@ do
 
     function M.close(why)
         local mn = M.menu
+        if KCD2MP_LookClosed then pcall(KCD2MP_LookClosed) end   -- modified build: the character window and its preview go too
         if not mn.open then return false end
         mn.open = false
         mn.gen = mn.gen + 1   -- the running frame chain ends at its next frame
@@ -28232,6 +28265,7 @@ do
         local x = math.floor(M.vp.w * L.xFrac)
         local y = math.floor(M.vp.h * L.yFrac)
         local key = M.KEY_NAMES[M.menuKey] or "Insert"
+        if KCD2MP_LookDraw and KCD2MP_LookDraw(x, y, key) then return end   -- modified build: the character window
         System.DrawText(x, y, "Kingdom Come: Together -- mod menu (" .. key .. " to close)", L.title)
         y = y + L.line + 6
         if M.clean then
@@ -28311,6 +28345,7 @@ do
         local s = tostring(arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
         if s == "" or s == "%line" or s == "nil" then s = "status" end
         local verb, rest = s:match("^(%S+)%s*(.-)$")
+        if KCD2MP_LookKey and KCD2MP_LookKey(verb) then return true end   -- modified build: the character window takes PgUp/PgDn/End while open
         if verb == "open" then
             if M.isOpen() then mp_log("MP-MENU already open"); return true end
             return M.open(src)
@@ -28399,6 +28434,179 @@ do
         if w114 and w114.ftBlocked and KCD2MP_W167FtMapWindow and not KCD2MP_W167FtMapWindow() then
             KCD2MP_Wo114FastTravelBlock(w114.ftArmed == true, "the pick window ended")
         end
+    end
+end
+
+-- ===== Modified build: the character window (Insert -> Charakter wechseln) =====
+-- The agent owns the list (every adult NPC of this game) and sends it a page at a time. PgUp/PgDn choose, End confirms, the menu key
+-- closes. While a character is highlighted, a local preview body stands in front of the player: he never sees his own figure otherwise.
+-- The preview is never saved, never streamed and goes when the window closes.
+do
+    KCD2MP.look = KCD2MP.look or { open = false, rows = {}, sel = 1, node = "root", title = "", cur = "" }
+    local L, M = KCD2MP.look, KCD2MP.w154menu
+    local PREVIEW = "kcd2mp_preview_"   -- + a counter: the engine removes a body a frame later, so a name is never reused
+    local PREVIEW_DELAY_S, PREVIEW_GAP_S, ANSWER_TIMEOUT_S, ROWS_LINE = 0.4, 0.7, 6.0, 22
+
+    local function removePreview()
+        local e, name = L.previewEnt, L.previewName
+        L.previewEnt, L.previewGuid, L.previewName = nil, nil, nil
+        if e and name then mp_remove_entity_verified(e.id, name, "character preview") end
+    end
+
+    local function spawnPreview(row)
+        removePreview()
+        local p, d = nil, nil
+        pcall(function() p = player:GetWorldPos(); d = player:GetDirectionVector() end)
+        if not (p and d) then return false end
+        local len = math.sqrt(d.x * d.x + d.y * d.y)
+        local ux, uy = 0, 1
+        if len > 0.01 then ux, uy = d.x / len, d.y / len end
+        L.previewSeq = (L.previewSeq or 0) + 1
+        local name = PREVIEW .. L.previewSeq
+        pcall(function()
+            XGenAIModule.SpawnEntity({ Name = name, ClassName = row.cls, Pos = { p.x + ux * 2.4, p.y + uy * 2.4, p.z }, SharedSoulGuid = row.guid })
+        end)
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if not e then
+            L.note = "Vorschau nicht moeglich."
+            return false
+        end
+        L.previewEnt, L.previewGuid, L.previewName = e, row.guid, name
+        mp_set_no_save(e)
+        pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. name)
+        pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = math.atan2(ux, -uy) }) end)   -- faces the player
+        return true
+    end
+
+    local function request(node)
+        L.want, L.incoming, L.waiting, L.askAt = node, nil, true, os.clock()
+        KCD2MP_EmitEvent("fig_list", node)
+    end
+
+    local function busyWhy()
+        local mounted, fight = KCD2MP.isRiding == true, false
+        pcall(function() mounted = mounted or player.human:IsMounted() == true end)
+        pcall(function() fight = player.soul:IsInCombatDanger() == true end)
+        if mounted then return "Steig zuerst vom Pferd ab." end
+        if fight then return "Im Kampf geht das nicht." end
+        return nil
+    end
+
+    function KCD2MP_LookOpen()
+        if not M.fresh() then
+            M.setNote("Der Helfer laeuft nicht: starte das Spiel ueber den Launcher.")
+            return false
+        end
+        L.open, L.rows, L.sel, L.note = true, {}, 1, nil
+        request("root")
+        mp_log("FIGURE window open")
+        return true
+    end
+
+    function KCD2MP_LookClosed()
+        if L.open then mp_log("FIGURE window closed") end
+        L.open, L.waiting, L.incoming = false, false, nil
+        removePreview()
+    end
+
+    local function activate(r)
+        if r.t == "n" or r.t == "b" then request(r.k); return end
+        local why = busyWhy()
+        if why then L.note = why; return end
+        L.note = "Wird uebernommen..."
+        KCD2MP_EmitEvent("fig_pick", r.t == "r" and "none" or r.k)
+    end
+
+    -- True = the window took the key. The menu key is the menu's own: closing it closes the window.
+    function KCD2MP_LookKey(verb)
+        if not L.open then return false end
+        if verb ~= "up" and verb ~= "down" and verb ~= "change" then return false end
+        if L.waiting or #L.rows == 0 then return true end
+        if verb == "change" then
+            activate(L.rows[L.sel])
+        else
+            local n = #L.rows
+            L.sel = ((L.sel - 1 + (verb == "up" and -1 or 1)) % n) + 1
+            L.selAt = os.clock()
+        end
+        return true
+    end
+
+    function KCD2MP_FigurePageBegin(node, title, cur, n)
+        if not L.open or node ~= L.want then return false end
+        L.incoming = { node = node, title = title, cur = cur, n = tonumber(n) or 0, rows = {} }
+        return true
+    end
+
+    function KCD2MP_FigureRow(node, t, k, label, guid, cls)
+        local inc = L.incoming
+        if not inc or node ~= inc.node then return false end
+        inc.rows[#inc.rows + 1] = { t = t, k = k, label = label, guid = guid, cls = cls }
+        if #inc.rows < inc.n then return true end
+        L.node, L.title, L.cur, L.rows = inc.node, inc.title, inc.cur, inc.rows
+        L.incoming, L.waiting = nil, false
+        L.sel = (#L.rows > 1 and L.rows[1].t == "b") and 2 or 1
+        L.selAt = os.clock()
+        return true
+    end
+
+    function KCD2MP_FigureCurrent(soul, label, saved)
+        L.cur = tostring(soul or "")
+        L.note = (L.cur == "" and "Zurueck auf der Standardfigur." or ("Dein Partner sieht dich jetzt als " .. tostring(label) .. "."))
+            .. (saved == false and " (Konnte nicht gespeichert werden.)" or "")
+        mp_log("FIGURE chosen " .. (L.cur == "" and "standard" or L.cur))
+        return true
+    end
+
+    function KCD2MP_FigureError(text)
+        L.waiting, L.incoming = false, nil
+        L.note = tostring(text)
+        return true
+    end
+
+    -- From the menu's draw: true = the window drew instead of the menu.
+    function KCD2MP_LookDraw(x, y, key)
+        if not L.open then return false end
+        local now, S = os.clock(), M.LAYOUT
+        if L.waiting and (now - (L.askAt or now)) > ANSWER_TIMEOUT_S then
+            L.waiting, L.incoming = false, nil
+            L.note = "Keine Antwort vom Helfer. Schliess das Fenster und versuch es nochmal."
+        end
+        local sel = L.rows[L.sel]
+        if sel and sel.t == "s" then
+            if sel.guid ~= L.previewGuid and (now - (L.selAt or now)) >= PREVIEW_DELAY_S and (now - (L.previewAt or -1e9)) >= PREVIEW_GAP_S then
+                L.previewAt = now
+                spawnPreview(sel)
+            end
+        elseif L.previewEnt then
+            removePreview()
+        end
+        System.DrawText(x, y, "Charakter wechseln (" .. key .. " schliesst)", S.title)
+        y = y + S.line + 6
+        System.DrawText(x, y, L.waiting and "Lade..." or tostring(L.title), S.small)
+        y = y + ROWS_LINE + 2
+        for i, r in ipairs(L.rows) do
+            local mark = ((r.t == "s" and r.k == L.cur) or (r.t == "r" and L.cur == "")) and "  [aktiv]" or ""
+            System.DrawText(x, y, (i == L.sel and "> " or "  ") .. tostring(r.label) .. mark, S.row)
+            y = y + S.line
+        end
+        y = y + 6
+        if sel and sel.t == "s" and string.find(tostring(sel.label), "(!)", 1, true) then
+            for _, ln in ipairs(M.wrap("(!) Story-Figur, Wache oder Feind: das Original kann in der Welt doppelt stehen.", S.wrap)) do
+                System.DrawText(x, y, ln, S.small)
+                y = y + S.line - 2
+            end
+        end
+        if L.note then
+            for _, ln in ipairs(M.wrap(L.note, S.wrap)) do
+                System.DrawText(x, y, ln, S.small)
+                y = y + S.line - 2
+            end
+        end
+        y = y + 4
+        System.DrawText(x, y, "PgUp/PgDn waehlen  End bestaetigen  " .. key .. " schliessen", S.small)
+        return true
     end
 end
 
@@ -29047,6 +29255,7 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_npc_track_max",       'KCD2MP_SetNpcTrackMax(%line)',               "WO-110 R3: how many NPCs (nearest first) the native scan pushes for the owner to track: mp_npc_track_max <n> (10..400, default 200; 0.26.4 was 40 in engine walk order); bare = report")
 
     -- WO-154 7b: the mod menu (Insert) and its four new switches. The menu calls these same functions.
+    System.AddCCommand("mp_character", 'KCD2MP_LookOpen()', "Modified build: opens the character window (needs the mod menu open: mp_menu open)")
     System.AddCCommand("mp_menu",         'KCD2MP_W154Menu(%line)',           "WO-154: the mod menu (Insert opens it, PgUp/PgDn choose, End changes) -- exactly what its keys do: mp_menu open|close|up|down|change|status|select <n|item>; bare = status")
     System.AddCCommand("mp_name_badges",  'KCD2MP_W154SetNameBadges(%line)',  "WO-154: your partner's name (and health) above his figure (default on): mp_name_badges on|off; bare = report")
     System.AddCCommand("mp_ping_line",    'KCD2MP_W154SetPingLine(%line)',    "WO-154: the ping and clock line in the top left corner (default on): mp_ping_line on|off; bare = report")

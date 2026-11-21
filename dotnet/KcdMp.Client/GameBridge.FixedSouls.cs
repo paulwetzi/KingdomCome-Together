@@ -13,7 +13,8 @@ public partial class GameBridge
     private FixedSouls.Entry? FixedSoulOf(string? name) =>
         name is not null && _fixedSouls.Value.TryGetValue(name.Trim(), out var entry) ? entry : null;
 
-    private bool IsFixedLook(byte ghostId) => _ghostNames.TryGetValue(ghostId, out var name) && FixedSoulOf(name) is not null;
+    private bool IsFixedLook(byte ghostId) =>
+        _ghostLooks.ContainsKey(ghostId) || (_ghostNames.TryGetValue(ghostId, out var name) && FixedSoulOf(name) is not null);
 
     /// <summary>Before the name reaches the mod, so the first spawn under that name already uses the fixed soul.</summary>
     private async Task PushFixedSoulAsync(string name)

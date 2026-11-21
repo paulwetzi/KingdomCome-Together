@@ -1718,6 +1718,8 @@ public enum ActionKind : byte
     /// guard, 2 a clinch move, 3 leave), bit 2 = this player is the master, bit 3 = Row (the master's row) and the slave's row (the RowEvent's
     /// name: its 32 hex digits, "N" format) are the engine's own SyncTransition rows. Any player sends it; the relay forwards it as is.</summary>
     AvatarClinch = 20,
+    /// <summary>Modified build: the character this player chose, <c>[class:1][soul guid:16]</c> (FigureWire). Any player sends it about himself; the relay forwards it as is.</summary>
+    FigureLook = 21,
 }
 
 /// <summary>WO-151 3.5: what an Emote action plays (APPEND-ONLY).</summary>
