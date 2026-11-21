@@ -58,5 +58,5 @@ Im `kcd.log` stehen dazu `FIGURE chosen ...` beim Wählenden und `FIGURE ghost .
 Eine Figur lässt sich auch fest einem Steam-Namen zuordnen. Die Wahl im Fenster hat aber immer Vorrang:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-FixedSoul.ps1 -PlayerName "Steam-Name" -Soul ttkc_woman_6
+powershell -ExecutionPolicy Bypass -File .\Install-FixedSoul.ps1 -PlayerName "Steam-Name" -Soul ttkc_woman_9
 ```

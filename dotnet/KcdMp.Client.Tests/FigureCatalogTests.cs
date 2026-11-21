@@ -53,6 +53,118 @@ public class FigureCatalogTests
         Assert.Equal(0, c.Count);
     }
 
+    [Theory]
+    [InlineData("cart_test_npcDriver", "tabc_commonFolk", "char_GENERIC_MAN_1")]
+    [InlineData("cutscene_zizkaScar", "tabc_commonFolk", "char_GENERIC_MAN_1")]
+    [InlineData("dummyWanderer_3", "tabc_commonFolk", "char_GENERIC_MAN_1")]
+    [InlineData("battleBenchmark_7", "tabc_commonFolk", "char_GENERIC_MAN_1")]
+    [InlineData("ttkc_man_1", "deadBodies", "char_GENERIC_MAN_1")]
+    [InlineData("ttkc_man_2", "test_npcs", "char_GENERIC_MAN_1")]
+    [InlineData("ttkc_woman_3", "tabc_commonFolk", "char_MLYNAROVA_DCERA_VANKA")]
+    [InlineData("ttkc_man_4", "tabc_commonFolk", "char_HOSPODSKEHO_SYN_MAREK")]
+    public void Staging_souls_corpses_and_sons_or_daughters_are_never_listed(string name, string faction, string skald) =>
+        Assert.Null(FigureCatalog.Build(new[] { Row(name, faction: faction, skald: skald) }, NoText).ByName(name));
+
+    [Fact]
+    public void A_child_title_is_refused_but_a_job_with_the_same_word_inside_is_not()
+    {
+        var text = new Dictionary<string, string> { ["a"] = "Junges Mädchen", ["b"] = "Zubermädchen" };
+        var c = FigureCatalog.Build(new[] { Row("ttkc_woman_1", skald: "char_X", ui: "a"), Row("ttkc_woman_2", ui: "b") }, text);
+        Assert.Null(c.ByName("ttkc_woman_1"));
+        Assert.Equal("Zubermaedchen 2", c.ByName("ttkc_woman_2")!.Label);
+    }
+
+    [Fact]
+    public void Generic_soldiers_are_guards_even_with_a_civil_crime_role()
+    {
+        var c = FigureCatalog.Build(new[]
+        {
+            Row("kkut_man_1", "NPC", skald: "char_GENERIC_MAN_SOLDIER_30", social: "villager"),
+            Row("kkut_man_2", "NPC", skald: "char_GENERIC_MAN_COMMONER_1", social: "soldier"),
+            Row("kkut_man_3", "NPC", skald: "char_GENERIC_MAN_CUMAN_1"),
+        }, NoText);
+        Assert.Equal(FigureGroup.Guards, c.ByName("kkut_man_1")!.Group);
+        Assert.Equal(FigureGroup.Guards, c.ByName("kkut_man_2")!.Group);
+        Assert.Equal(FigureGroup.Enemies, c.ByName("kkut_man_3")!.Group);
+    }
+
+    [Fact]
+    public void Places_are_merged_and_scene_souls_share_one_entry()
+    {
+        var c = FigureCatalog.Build(new[] { Row("kopa_woman_1"), Row("kvrc_woman_2"), Row("pogrom_woman_3"), Row("hladAZmar_woman_4") }, NoText);
+        Assert.Equal("kland", c.ByName("kopa_woman_1")!.Place);
+        Assert.Equal("kland", c.ByName("kvrc_woman_2")!.Place);
+        Assert.Equal("szenen", c.ByName("pogrom_woman_3")!.Place);
+        Assert.Equal("szenen", c.ByName("hladAZmar_woman_4")!.Place);
+    }
+
+    [Fact]
+    public void Equal_titles_in_one_place_get_a_running_number()
+    {
+        var text = new Dictionary<string, string> { ["a"] = "Magd" };
+        var c = FigureCatalog.Build(new[] { Row("ttkc_a", skald: "char_GENERIC_WOMAN_1", ui: "a"), Row("ttkc_b", skald: "char_GENERIC_WOMAN_1", ui: "a") }, text);
+        Assert.Equal("Magd", c.ByName("ttkc_a")!.Label);
+        Assert.Equal("Magd #2", c.ByName("ttkc_b")!.Label);
+    }
+
+    [Theory]
+    [InlineData("wench", true, "soul_ui_name_wench")]
+    [InlineData("wench", false, "soul_ui_name_villager_man")]
+    [InlineData("gypsy", true, "soul_ui_name_nomad_woman")]
+    [InlineData("merchant", true, "soul_ui_name_merchant_woman")]
+    [InlineData("unknownJob", true, "soul_ui_name_villager_woman")]
+    public void A_generic_title_follows_the_job_and_the_gender(string social, bool female, string expected)
+    {
+        var text = new[] { "soul_ui_name_wench", "soul_ui_name_villager_man", "soul_ui_name_villager_woman", "soul_ui_name_nomad_woman", "soul_ui_name_merchant_woman" }
+            .ToDictionary(k => k, k => k);
+        Assert.Equal(expected, FigureCatalog.TitleKey("char_GENERIC_1", new Dictionary<string, string>(), social, female, text));
+    }
+
+    /// <summary>Only runs against a real game: set KCDMP_REAL_TABLES to its Data\Tables.pak.</summary>
+    [Fact]
+    public void The_real_game_tables_give_a_clean_list()
+    {
+        string? pak = Environment.GetEnvironmentVariable("KCDMP_REAL_TABLES");
+        if (string.IsNullOrEmpty(pak)) return;
+        var c = FigureCatalog.Load(pak);
+        Assert.InRange(c.Count, 3000, 8000);
+        foreach (var (soul, guid) in FixedSouls.Catalog)
+        {
+            var f = c.ById(Guid.Parse(guid));
+            Assert.True(f is not null, soul);
+            Assert.Equal(FigureGroup.Women, f!.Group);
+            Assert.Equal("NPC_Female", f.Class);
+        }
+        var report = new StringBuilder();
+        foreach (FigureGroup g in Enum.GetValues<FigureGroup>()) report.AppendLine($"{g}: {c.CountIn(g)}");
+        var seen = new HashSet<string>();
+        var nodes = new Stack<string>();
+        nodes.Push("root");
+        int pages = 0;
+        while (nodes.Count > 0)
+        {
+            string n = nodes.Pop();
+            if (!seen.Add(n)) continue;
+            var p = c.PageFor(n);
+            Assert.True(p is not null, n);
+            pages++;
+            Assert.True(p!.Rows.Count <= FigureCatalog.PageSize + 3, n);
+            if (pages <= 3 || n.EndsWith(".tsem")) report.AppendLine($"[{p.Title}] " + string.Join(" | ", p.Rows.Select(r => r.Label)));
+            foreach (var r in p.Rows.Where(x => x.Type == 'n')) nodes.Push(r.Key);
+            foreach (var r in p.Rows.Where(x => x.Type == 's'))
+            {
+                Assert.False(string.IsNullOrWhiteSpace(r.Label), r.Key);
+                Assert.All(r.Label, ch => Assert.True(ch < 128, r.Key));
+                Assert.DoesNotContain("_", r.Label);
+                seen.Add("soul:" + r.Key);
+            }
+        }
+        Assert.Equal(c.Count, seen.Count(x => x.StartsWith("soul:")));
+        report.AppendLine($"total {c.Count}, pages {pages}");
+        string? output = Environment.GetEnvironmentVariable("KCDMP_REAL_TABLES_REPORT");
+        if (!string.IsNullOrEmpty(output)) File.WriteAllText(output, report.ToString());
+    }
+
     [Fact]
     public void A_bandit_word_inside_a_name_is_not_mistaken_for_a_child()
     {

@@ -36,15 +36,36 @@ public sealed class FigureCatalog
     {
         ["tsem"] = "Semine", ["tsla"] = "Slatejov", ["ttac"] = "Tachov", ["ttkc"] = "Troskowitz", ["ttro"] = "Trosky",
         ["tvez"] = "Roma-Lager", ["tvid"] = "Vidlak", ["tzel"] = "Zelejov", ["tneb"] = "Nebakov", ["tpod"] = "Podsemin",
-        ["tkop"] = "Kopanina", ["tbuk"] = "Bukov", ["tzda"] = "Zdar",
+        ["tkop"] = "Kopanina", ["tbuk"] = "Bukov", ["tzda"] = "Zdar", ["tland"] = "Umland Trosky",
+        ["kkut"] = "Kuttenberg", ["ksuc"] = "Suchdol", ["kzik"] = "Sigismunds Lager", ["kgru"] = "Grunta", ["kmis"] = "Miskovice",
+        ["kpri"] = "Pritoky", ["ksta"] = "Stara Kutna", ["kmal"] = "Malesov", ["kbyl"] = "Bylany", ["khor"] = "Horany",
+        ["klor"] = "Lorec", ["krat"] = "Ratboricko", ["kcer"] = "Certovka", ["kboh"] = "Bohounovice", ["kvys"] = "Vysoka",
+        ["kmez"] = "Mezholezy", ["kpec"] = "Pecky", ["ksed"] = "Sedlec", ["krab"] = "Rabstejnka", ["ssed"] = "Kloster Sedlec",
+        ["kland"] = "Umland Kuttenberg", [SceneKey] = "Szenen und Ereignisse",
+    };
+    private const string SceneKey = "szenen";
+    /// <summary>Small map areas with a few camps each: one entry per region keeps the place list short.</summary>
+    private static readonly IReadOnlyDictionary<string, string> MergedPlaces = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["tapo"] = "tland", ["tkrc"] = "tland", ["kkop"] = "kland", ["kkuk"] = "kland", ["knab"] = "kland", ["kopa"] = "kland",
+        ["ksus"] = "kland", ["kvlc"] = "kland", ["kvrc"] = "kland",
     };
 
     private static readonly Regex NotPlayable = new(
         @"(^|_)(test|tests|autotest|autotests|dummy|debug|template|placeholder|kdcmp|player|child|children|kid|kids|boy|girl|baby|infant|dite|deti|chlapec|holcicka|divka|kluk)\d*(_|$)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex NotAWorldSoul = new(@"^(?:cart|cutscene|battleBenchmark|dummy[a-z]*)(?:_|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex NotAWorldFaction = new(@"^(?:test_|deadBodies|trosecko_justice_league)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ChildClass = new("child|kid|boy|girl", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // The game's tables have no child flag on a named character. Its name or German title is what says so; when in doubt it stays out.
+    private static readonly Regex ChildSkald = new(@"(^|_)(HOLKA|DCERA|SYN|MALEJ|DITE|DETI|KLUK|CHLAPEC|DIVKA)(_|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ChildTitle = new(@"(?<!\p{L})(M(ä|ae)dchen|Kind|Knabe|Junge|Sohn|Tochter)(?!\p{L})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex EnemyFaction = new("enem|bandit|cuman|kuman", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GuardFaction = new("soldier|guard|militia", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex EnemySkald = new("_(ENEMY|CUMAN)(_|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GuardSkald = new("_(SOLDIER|GUARD)(_|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GuardClass = new("^(soldier|officer|guard|guardLeader|watchman|bailiff|shootmaster|soldier_crimeAuthority|huntsman_crimeAuthority)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex Numbered = new(@"_(?:man|woman)_(\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex NodeShape = new(@"^(?:root|g([0-4])(?:\.([a-z0-9]{1,24}))?)(?:@(\d{1,5}))?$", RegexOptions.CultureInvariant);
     private static readonly Regex RowRx = new("<Row>(.*?)</Row>", RegexOptions.Singleline | RegexOptions.CultureInvariant);
@@ -71,7 +92,10 @@ public sealed class FigureCatalog
         var seen = new HashSet<Guid>();
         foreach (var r in rows)
         {
-            if (r.Class is not ("NPC" or "NPC_Female") || NotPlayable.IsMatch(r.Name) || ChildClass.IsMatch(r.SocialClass) || !seen.Add(r.Id)) continue;
+            if (r.Class is not ("NPC" or "NPC_Female") || NotPlayable.IsMatch(r.Name) || NotAWorldSoul.IsMatch(r.Name)
+                || NotAWorldFaction.IsMatch(r.Faction) || ChildClass.IsMatch(r.SocialClass) || ChildSkald.IsMatch(r.Skald)
+                || (r.UiKey.Length > 0 && text.TryGetValue(r.UiKey, out var title) && ChildTitle.IsMatch(title))
+                || !seen.Add(r.Id)) continue;
             var group = GroupOf(r);
             list.Add(new Figure(r.Name, r.Id, r.Class, group, PlaceKey(r.Name), LabelOf(r, group, text)));
         }
@@ -82,15 +106,26 @@ public sealed class FigureCatalog
             c = NumberOf(a.Soul).CompareTo(NumberOf(b.Soul));
             return c != 0 ? c : string.CompareOrdinal(a.Soul, b.Soul);
         });
+        // Many generic NPCs of one place share a title: a running number keeps every row of a page distinct.
+        var taken = new Dictionary<(FigureGroup, string, string), int>();
+        for (int i = 0; i < list.Count; i++)
+        {
+            var key = (list[i].Group, list[i].Place, list[i].Label);
+            int n = taken.GetValueOrDefault(key) + 1;
+            taken[key] = n;
+            if (n > 1) list[i] = list[i] with { Label = $"{list[i].Label} #{n}" };
+        }
         return new FigureCatalog(list);
     }
 
     private static FigureGroup GroupOf(SoulRow r)
     {
-        bool generic = r.Skald.StartsWith("char_GENERIC", StringComparison.OrdinalIgnoreCase) || (r.Skald.Length == 0 && Numbered.IsMatch(r.Name));
+        bool generic = r.Skald.StartsWith("char_GENERIC", StringComparison.OrdinalIgnoreCase)
+            || r.Skald.StartsWith("char_DONATIONS_GENERIC", StringComparison.OrdinalIgnoreCase)
+            || (r.Skald.Length == 0 && Numbered.IsMatch(r.Name));
         if ((r.Vip.Length > 0 && r.Vip != "0") || !generic) return FigureGroup.Story;
-        if (r.CrimeRole == "3" || EnemyFaction.IsMatch(r.Faction)) return FigureGroup.Enemies;
-        if (r.CrimeRole == "2" || GuardFaction.IsMatch(r.Faction)) return FigureGroup.Guards;
+        if (r.CrimeRole == "3" || EnemyFaction.IsMatch(r.Faction) || EnemySkald.IsMatch(r.Skald)) return FigureGroup.Enemies;
+        if (r.CrimeRole == "2" || GuardFaction.IsMatch(r.Faction) || GuardSkald.IsMatch(r.Skald) || GuardClass.IsMatch(r.SocialClass)) return FigureGroup.Guards;
         return r.Class == "NPC_Female" ? FigureGroup.Women : FigureGroup.Men;
     }
 
@@ -98,7 +133,8 @@ public sealed class FigureCatalog
     {
         int i = soul.IndexOf('_');
         string p = (i > 0 ? soul[..i] : soul).ToLowerInvariant();
-        return Regex.IsMatch(p, "^[a-z0-9]{1,24}$") ? p : "sonstige";
+        if (MergedPlaces.TryGetValue(p, out var merged)) return merged;
+        return Places.ContainsKey(p) ? p : SceneKey;
     }
 
     private static string PlaceName(string key) =>
@@ -185,22 +221,50 @@ public sealed class FigureCatalog
             foreach (var a in Elements(ce, "social_class"))
                 if (a.TryGetValue("social_class_id", out var id))
                     classes[id] = (a.GetValueOrDefault("social_class_name", ""), a.GetValueOrDefault("soul_crime_role_id", ""));
+        var skaldTitles = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (zip.GetEntry("Libs/Tables/skald/skald_character.xml") is { } se)
+            foreach (var a in Elements(se, "skald_character"))
+                if (a.TryGetValue("skald_character_name", out var n) && a.TryGetValue("ui_name_string_name", out var k)) skaldTitles[n] = k;
+        var text = LoadNames(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(tablesPak))));
         var rows = new List<SoulRow>();
         foreach (var e in zip.Entries)
         {
             if (!Regex.IsMatch(e.FullName, @"^Libs/Tables/rpg/soul(__[^/]+)?\.xml$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) continue;
-            if (e.Name.Contains("autotests", StringComparison.OrdinalIgnoreCase) || e.Name.Contains("kcdmp", StringComparison.OrdinalIgnoreCase)) continue;
+            if (Regex.IsMatch(e.Name, @"^soul__(auto)?tests?\.xml$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                || e.Name.Contains("kcdmp", StringComparison.OrdinalIgnoreCase)) continue;
             foreach (var a in Elements(e, "soul"))
             {
                 if (!a.TryGetValue("soul_name", out var name) || !a.TryGetValue("soul_id", out var g) || !Guid.TryParse(g, out var id)) continue;
                 string cls = a.TryGetValue("soul_archetype_id", out var aid) && arch.TryGetValue(aid, out var an) ? an : arch.GetValueOrDefault("0", "NPC");
                 classes.TryGetValue(a.GetValueOrDefault("social_class_id", ""), out var sc);
-                string ui = a.Values.FirstOrDefault(v => v.StartsWith("soul_ui_name", StringComparison.Ordinal)) ?? "";
+                string skald = a.GetValueOrDefault("skald_character_name", "");
+                string direct = a.Values.FirstOrDefault(v => v.StartsWith("soul_ui_name", StringComparison.Ordinal)) ?? "";
+                string ui = direct.Length > 0 ? direct : TitleKey(skald, skaldTitles, sc.Name ?? "", cls == "NPC_Female", text);
                 rows.Add(new SoulRow(name, id, cls, sc.Name ?? "", sc.Role ?? "", a.GetValueOrDefault("soul_vip_class_id", "0"),
-                    a.GetValueOrDefault("skald_character_name", ""), a.GetValueOrDefault("factionName", ""), ui));
+                    skald, a.GetValueOrDefault("factionName", ""), ui));
             }
         }
-        return Build(rows, LoadNames(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(tablesPak)))));
+        return Build(rows, text);
+    }
+
+    /// <summary>A named character's own title, otherwise the game's word for the NPC's job in the right gender.</summary>
+    public static string TitleKey(string skald, IReadOnlyDictionary<string, string> skaldTitles, string social, bool female,
+                                    IReadOnlyDictionary<string, string> text)
+    {
+        if (skaldTitles.TryGetValue(skald, out var own) && text.ContainsKey(own)) return own;
+        string g = female ? "woman" : "man";
+        string job = (social, female) switch
+        {
+            ("cook", true) => "cooky",
+            ("townsman", true) => "townswoman",
+            ("gypsy", _) => "nomad",
+            ("nobleman", true) => "townswoman",
+            ("bartender" or "bathhouseMaid" or "housekeeper" or "wench", false) => "villager",
+            _ => social,
+        };
+        foreach (var k in new[] { $"soul_ui_name_{job}_{g}", $"soul_ui_name_{job}", $"soul_ui_name_villager_{g}" })
+            if (text.ContainsKey(k)) return k;
+        return "";
     }
 
     private static Dictionary<string, string> LoadNames(string? gameRoot)

@@ -11,10 +11,17 @@ public class FixedSoulsTests
     [Fact]
     public void A_catalog_soul_resolves_to_its_guid_and_the_name_ignores_case()
     {
-        var map = FixedSouls.Parse("{ \"Some Player\": \"TTKC_woman_6\" }", _ => { });
-        Assert.Equal("ttkc_woman_6", map["some player"].Soul);
-        Assert.Equal("4763a986-8361-a712-61d9-bf6dd706ddb6", map["SOME PLAYER"].Guid);
+        var map = FixedSouls.Parse("{ \"Some Player\": \"TTKC_woman_9\" }", _ => { });
+        Assert.Equal("ttkc_woman_9", map["some player"].Soul);
+        Assert.Equal("7ac037fe-60ca-4212-a39f-0093cff270ba", map["SOME PLAYER"].Guid);
     }
+
+    [Theory]
+    [InlineData("ttkc_woman_6")]
+    [InlineData("tsla_woman_1")]
+    [InlineData("tvid_woman_1")]
+    public void A_named_character_is_not_offered_as_a_catalog_soul(string soul) =>
+        Assert.False(FixedSouls.Catalog.ContainsKey(soul));
 
     [Fact]
     public void A_custom_soul_needs_a_name_and_a_guid()

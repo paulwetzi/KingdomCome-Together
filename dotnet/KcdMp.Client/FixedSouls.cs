@@ -9,7 +9,7 @@ namespace KcdMp.Client;
 /// <summary>
 /// Modified build (not the official project): a player's figure can be a fixed female NPC soul. The mapping lives in
 /// <c>fixed-souls.json</c> beside the agent, so a player's name is never part of the repository:
-/// <c>{ "Steam name": "ttkc_woman_6" }</c>. The value is a name from <see cref="Catalog"/> or "soul_name:guid".
+/// <c>{ "Steam name": "ttkc_woman_9" }</c>. The value is a name from <see cref="Catalog"/> or "soul_name:guid".
 /// </summary>
 public static class FixedSouls
 {
@@ -21,23 +21,24 @@ public static class FixedSouls
         "^([A-Za-z0-9_]{1,64}):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
         RegexOptions.CultureInvariant);
 
-    /// <summary>Female souls whose SharedSoulGuid was read from a running game twice (tools/soul-identity-run1/2.csv).</summary>
+    /// <summary>
+    /// Generic civilian women (no named character, no guard or authority role) whose SharedSoulGuid was read from a running
+    /// game twice (tools/soul-identity-run1/2.csv). The game's table spells one of them tsem_women_9, the running game tsem_woman_9.
+    /// </summary>
     public static readonly IReadOnlyDictionary<string, string> Catalog = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["tsem_woman_8"] = "456dc2bd-1ede-2372-7ee7-fed064e80ea8",
         ["tsem_woman_9"] = "4187a4bf-c27a-dd4b-c348-7bec934968ad",
+        ["tsem_women_9"] = "4187a4bf-c27a-dd4b-c348-7bec934968ad",
         ["tsem_woman_12"] = "46ec6bf1-3bac-85d6-8ee7-f90b1b25a4a8",
-        ["tsla_woman_1"] = "4e9bdbd4-885f-b50b-3940-d9ff9a000382",
         ["ttac_woman_3"] = "48de9403-4fa6-32c3-7dd7-007ef5dc1489",
         ["ttac_woman_4"] = "49daaf6f-5119-420a-b7c6-33825b912bb3",
         ["ttac_woman_7"] = "ddf4ac93-d15d-4728-8083-16cf46f68444",
-        ["ttkc_woman_6"] = "4763a986-8361-a712-61d9-bf6dd706ddb6",
         ["ttkc_woman_9"] = "7ac037fe-60ca-4212-a39f-0093cff270ba",
         ["ttkc_woman_17"] = "f9a94c81-d804-44ab-9d0e-9c4decefbcd0",
         ["tvez_woman_2"] = "488e80ea-f98d-d0e1-8dc7-4359d4701b8d",
         ["tvez_woman_3"] = "00ec8c08-21d3-4f65-8c84-cf28958f0cde",
         ["tvez_woman_5"] = "9349eb0d-91e3-4f48-94bd-6ef73370036e",
-        ["tvid_woman_1"] = "4bb85c62-b0f9-c430-27e5-2ecfd254df90",
         ["tzel_woman_3"] = "499b3100-8025-ece1-c741-ef13d59db783",
     };
 

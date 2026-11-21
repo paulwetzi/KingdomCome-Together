@@ -5,7 +5,7 @@
 .SYNOPSIS
     Puts the modified fixed-soul build over an installed official 0.63.9. Run on BOTH PCs, with the game and launcher closed.
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\Install-FixedSoul.ps1 -PlayerName "Steam name" -Soul ttkc_woman_6
+    powershell -ExecutionPolicy Bypass -File .\Install-FixedSoul.ps1 -PlayerName "Steam name" -Soul ttkc_woman_9
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\Install-FixedSoul.ps1 -Uninstall
 #>
