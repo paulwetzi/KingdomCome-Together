@@ -30976,7 +30976,7 @@ end
 
 -- Modified build: farm animals placed in the level have the same name on both machines, so they travel like the village dogs and a
 -- partner's blow lands on the host's animal. Animals the game spawns at random have a different name per machine and stay local.
-KCD2MP.farmSync = KCD2MP.farmSync or { on = true, classes = { SheepEwe = true, SheepRam = true, Pig = true, CattleCow = true, CattleBull = true } }
+KCD2MP.farmSync = KCD2MP.farmSync or { on = false, classes = { SheepEwe = true, SheepRam = true, Pig = true, CattleCow = true, CattleBull = true } }
 function KCD2MP_FarmSyncClass(cls)
     return KCD2MP.farmSync.on == true and KCD2MP.farmSync.classes[tostring(cls)] == true
 end
@@ -30991,7 +30991,7 @@ function KCD2MP_FarmSyncSet(arg)
     mp_log("FARM-SYNC toggle mp_farm_sync " .. (KCD2MP.farmSync.on and "on" or "off") .. " -- farm animals placed in the level travel in the NPC stream")
     return true
 end
-System.AddCCommand("mp_farm_sync", 'KCD2MP_FarmSyncSet(%line)', "Modified build: (both) sheep, pigs and cattle placed in the level are the host's, so a partner's blow counts (default on): mp_farm_sync on|off")
+System.AddCCommand("mp_farm_sync", 'KCD2MP_FarmSyncSet(%line)', "Modified build: (both) sheep, pigs and cattle placed in the level are the host's, so a partner's blow counts (default off until proven in a real session): mp_farm_sync on|off")
 
 -- The joiner: a host stream naming this world's own Mutt is never applied (a frozen Mutt does not follow its player).
 function KCD2MP_DogSyncRefuseInbound(name)
