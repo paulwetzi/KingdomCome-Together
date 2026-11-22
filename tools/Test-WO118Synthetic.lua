@@ -533,7 +533,7 @@ do
     alive(); gtick(90.3)
     local ev = evts("npc_native")
     check("n: healthy -> ghost bind event for kcd2mp_7 with the ghost delay",
-          #ev == 1 and ev[1]:find("^kcd2mp_7 on ") ~= nil and ev[1]:find(" 100$") ~= nil, ev[1])
+          #ev == 1 and ev[1]:find("^kcd2mp_7 on ") ~= nil and ev[1]:find(" 70$") ~= nil, ev[1])
     KCD2MP_NpcNativeAck("kcd2mp_7", 1, "ok")
     check("n: the ack lands on the ghost's istate", ist.nativeOwned == true)
     local w = #e.writes

@@ -457,8 +457,8 @@ do
     local mark = #LOG
     check("D1: the mounted avatar's horse goes native", KCD2MP_W154RideNative("5", true) == true)
     check("D1: the agent is told the horse and the saddle height (1.5 m)", countEvt("w154_ride", "5 ttkc_horse_3 1.500", mark) == 1, lastLog("w154_ride", mark))
-    check("D1: the horse is bound like a puppet (100 ms behind, like the avatar)", countEvt("npc_native", "ttkc_horse_3 on ", mark) == 1
-        and (lastLog("npc_native ttkc_horse_3 on", mark) or ""):find(" 100$") ~= nil, lastLog("npc_native", mark))
+    check("D1: the horse is bound like a puppet (70 ms behind, like the avatar)", countEvt("npc_native", "ttkc_horse_3 on ", mark) == 1
+        and (lastLog("npc_native ttkc_horse_3 on", mark) or ""):find(" 70$") ~= nil, lastLog("npc_native", mark))
     check("D1: its brain is held (one driver)", CMDS[#CMDS] == "wh_ai_PauseNPC ttkc_horse_3", CMDS[#CMDS])
     KCD2MP_ApplyHorseTransforms()
     check("D1: until the DLL says bound, this file still moves it", horse.writes == 1, tostring(horse.writes))

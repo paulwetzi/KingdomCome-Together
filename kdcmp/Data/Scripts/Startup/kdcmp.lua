@@ -3033,7 +3033,7 @@ end
 -- frame 100 ms behind, and this file keeps everything else (animation from the
 -- rendered speed, riding, the corpse freeze, labels). A riding, mounted or
 -- frozen ghost is never bound; a one-shot holds the writer for its window.
-TUNE.GHOST_NATIVE_DELAY_MS = 100   -- ~3.5 samples of the ~30 Hz player stream; the ring holds 8
+TUNE.GHOST_NATIVE_DELAY_MS = 70    -- WO-213: ~2 samples of the DLL's 30 Hz push (was 100 for the polled stream); the ring holds 8
 function KCD2MP_GhostNativeSync(id, ghost, want)
     local st = ghost and ghost.istate
     if not st then return end
@@ -11301,6 +11301,7 @@ function KCD2MP_SpawnHorse(id, x, y, z, rotZ)
 
     local pos = {x=x, y=y, z=z}
     local horseName = "kcd2mp_horse_" .. id
+    if KCD2MP_W213HideCopy then pcall(KCD2MP_W213HideCopy, id) end   -- WO-213: the stand-in never spawns inside this world's copy
 
     -- Use System.SpawnEntity only (XGenAIModule is async ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ creates orphan second entity)
     local horse = nil
@@ -11510,6 +11511,7 @@ end
 
 function KCD2MP_RemoveHorse(id)
     if KCD2MP_W154RideNative then pcall(KCD2MP_W154RideNative, id, false) end   -- WO-154 5
+    if KCD2MP_W213ShowCopy then pcall(KCD2MP_W213ShowCopy, id) end   -- WO-213
     local horseData = KCD2MP.horseGhosts[id]
     if not horseData then return end
     if horseData.isWorldHorse then
@@ -11737,6 +11739,7 @@ end
 -- drove InterpTick alone would leave a mounted ghost's horse standing still
 -- while the rider slid along on top of it.
 function KCD2MP_ApplyHorseTransforms()
+    if KCD2MP_W213RideTick then pcall(KCD2MP_W213RideTick) end   -- WO-213: a ridden stand-in and its rider stay shown
     for id, horseData in pairs(KCD2MP.horseGhosts) do
         if horseData.entity and horseData.renderX and not (horseData.native and horseData.native.bound) then   -- WO-154 5: the DLL writes it
             pcall(function()
@@ -18169,6 +18172,7 @@ KCD2MP.w144.shown = KCD2MP.w144.shown or {}
 function KCD2MP_W144ShowCopy(name)
     local w = KCD2MP.w144
     if not w.showAnimals then return false end
+    if KCD2MP_W213CopyHeld and KCD2MP_W213CopyHeld(tostring(name)) then return false end   -- WO-213: hidden while a partner rides the stand-in
     local e = nil
     pcall(function() e = System.GetEntityByName(tostring(name)) end)
     if not e then return false end
@@ -21766,6 +21770,98 @@ end
 --   WO160-MOUNT id=<n> ready after <s> s | refused after <s> s: <why>
 KCD2MP.w160.mountPollS, KCD2MP.w160.mountMaxS, KCD2MP.w160.mountReachM = 0.25, 5.0, 25.0
 KCD2MP.w160.mountStats = KCD2MP.w160.mountStats or { ready = 0, waited = 0, refused = 0 }
+-- ===== WO-213: a partner really sits on the stand-in horse =================================================================
+-- The game hides a body it finds wedged in something (the stand-in spawns exactly inside the copy of the horse the partner rides, or in a
+-- cart). The mount gate then refused every try, the repair gave up after five, and the figure stayed at saddle height: standing on the horse.
+-- A stand-in is ours: it is shown and mounted. While it is ridden, it and its rider are kept shown, and this world's copy of the ridden horse
+-- is hidden so two horses never share one spot. A real world horse keeps WO-160's gate.
+--   WO213-RIDE copy hidden|copy shown ...
+KCD2MP.w213 = KCD2MP.w213 or { tickAt = 0, copies = {}, stats = { shown = 0, copies = 0 } }
+KCD2MP.W213_COPY_NEAR_M = 12.0
+
+function KCD2MP_W213IsStandIn(horse)
+    if not (horse and horse.GetName) then return false end
+    local n = nil
+    pcall(function() n = horse:GetName() end)
+    return type(n) == "string" and string.find(n, "^kcd2mp_horse_") ~= nil
+end
+
+function KCD2MP_W213ShowStandIn(horse)
+    if not KCD2MP_W213IsStandIn(horse) then return false end
+    pcall(function() horse:Hide(0) end)
+    pcall(function() horse:Activate(1) end)
+    KCD2MP.w213.stats.shown = KCD2MP.w213.stats.shown + 1
+    return true
+end
+
+function KCD2MP_W213CopyHeld(name)
+    for _, n in pairs(KCD2MP.w213.copies) do
+        if n == name then return true end
+    end
+    return false
+end
+
+function KCD2MP_W213HideCopy(id)
+    id = tostring(id)
+    local w = KCD2MP.w213
+    if w.copies[id] then return false end
+    local name = KCD2MP.ghostHorseName and KCD2MP.ghostHorseName[id]
+    if not name or name == "" or name == "-" or name == KCD2MP._mountedHorseName then return false end
+    local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if not (e and g and g.entity) or tostring(e.class or "") ~= "Horse" or KCD2MP_W213IsStandIn(e) then return false end
+    local near, hidden = false, false
+    pcall(function()
+        local a, b = e:GetWorldPos(), g.entity:GetWorldPos()
+        near = (a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 <= KCD2MP.W213_COPY_NEAR_M ^ 2
+        hidden = e:IsHidden() == true
+    end)
+    if not near or hidden then return false end
+    pcall(function() e:Hide(1) end)
+    w.copies[id] = name
+    w.stats.copies = w.stats.copies + 1
+    mp_log(string.format("WO213-RIDE copy hidden id=%s horse=%s -- the partner rides the stand-in here", id, name))
+    return true
+end
+
+function KCD2MP_W213ShowCopy(id)
+    id = tostring(id)
+    local w = KCD2MP.w213
+    local name = w.copies[id]
+    if not name then return false end
+    w.copies[id] = nil
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if e then pcall(function() e:Hide(0) end) end
+    mp_log(string.format("WO213-RIDE copy shown id=%s horse=%s", id, name))
+    return true
+end
+
+-- Ten times a second while a partner rides. A figure a cutscene hid (WO-194) stays hidden.
+function KCD2MP_W213RideTick()
+    local w = KCD2MP.w213
+    local now = os.clock()
+    if now - w.tickAt < 0.1 then return end
+    w.tickAt = now
+    for id, hd in pairs(KCD2MP.horseGhosts or {}) do
+        local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
+        local scene = KCD2MP.w194 and KCD2MP.w194.hidden and KCD2MP.w194.hidden[id]
+        if hd.entity and not hd.isWorldHorse and g and g.entity and g.istate and g.istate.nativeMounted and not scene then
+            for _, e in ipairs({ hd.entity, g.entity }) do
+                local hidden = false
+                pcall(function() hidden = e:IsHidden() == true end)
+                if hidden then
+                    pcall(function() e:Hide(0) end)
+                    pcall(function() e:Activate(1) end)
+                    w.stats.shown = w.stats.shown + 1
+                end
+            end
+            KCD2MP_W213HideCopy(id)
+        end
+    end
+end
+
 function KCD2MP_W160MountReady(ghost, horse)
     local w = KCD2MP.w160
     if not horse.GetWorldPos then return true, nil end   -- no way to ask the body: the gate does not block what it cannot read
@@ -21774,9 +21870,10 @@ function KCD2MP_W160MountReady(ghost, horse)
     if not hp or (hp.x == 0 and hp.y == 0 and hp.z == 0) then return false, "horse-not-streamed-in" end
     local hidden = false
     pcall(function() if horse.IsHidden then hidden = horse:IsHidden() == true end end)
-    if hidden then return false, "horse-hidden" end
     local inactive = false
     pcall(function() if horse.IsActive then inactive = horse:IsActive() == false end end)
+    if (hidden or inactive) and KCD2MP_W213ShowStandIn(horse) then hidden, inactive = false, false end   -- WO-213
+    if hidden then return false, "horse-hidden" end
     if inactive then return false, "horse-inactive" end
     local human = nil
     pcall(function() human = ghost.entity and ghost.entity.human end)
@@ -25595,6 +25692,8 @@ function KCD2MP_W172RideCheck(now)
                     W.stats.gaveUp = W.stats.gaveUp + 1
                     mp_log(string.format("WO172-RIDE gave-up id=%s want=%s after %d tries -- left as it is until the rider mounts or gets off again", tostring(id), act, r.tries))
                 end
+            elseif act == "mount" and ghost.w160Mount then
+                -- WO-213: the mount gate is still waiting on this horse: a new horse now would only restart its wait
             elseif act == "mount" then
                 local pos = nil
                 pcall(function() pos = ghost.entity:GetWorldPos() end)

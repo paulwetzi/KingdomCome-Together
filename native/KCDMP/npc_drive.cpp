@@ -91,6 +91,9 @@ constexpr double kNeedStepS     = 0.004;  // the quantile tracker's step per sam
 constexpr double kNeedCapS      = 0.50;   // a longer gap is a moved-gated silence, not jitter
 constexpr double kLateMaxS      = 0.30;   // the allowance never exceeds this
 constexpr double kLateSlew      = 0.10;   // the applied allowance moves at most 10 % of real time
+// WO-213: a partner's figure and horse. One hitch used to grow the delay at once and take about a minute to shrink again.
+constexpr double kAvatarNeedStepS = 0.012;  // three times the step: back to normal in seconds
+constexpr double kAvatarLateMaxS  = 0.12;   // a longer gap is bridged by the short extrapolation, not by seeing the partner late
 constexpr float  kSnapM2        = 25.0f;  // mp_npc_ring_push: an XY step over 5 m is a teleport
 // The shortest segment render() interpolates over. Ported from Lua as 50 ms,
 // harmless for 100 ms NPC streams -- but the peer's ghost streams every ~30 ms,
@@ -409,7 +412,8 @@ double sender_stamp(uint8_t src, uint32_t senderMs, double nowPkt) {
 double late_target(const Stream& s, double delay) {
     if (!s.needInit) return 0.0;
     const double extra = s.needQ - delay;
-    return extra <= 0 ? 0.0 : (extra > kLateMaxS ? kLateMaxS : extra);
+    const double cap = s.name.rfind("kcd2mp_", 0) == 0 ? kAvatarLateMaxS : kLateMaxS;
+    return extra <= 0 ? 0.0 : (extra > cap ? cap : extra);
 }
 
 void push_sample(const InSample& in, double now) {
@@ -458,7 +462,10 @@ void push_sample(const InSample& in, double now) {
         const double need = now - s.ring[s.n - 1].at;
         if (need > 0 && need < kNeedCapS) {
             if (!s.needInit) { s.needQ = need; s.needInit = true; }
-            else s.needQ += need > s.needQ ? kNeedStepS * kNeedQ : -kNeedStepS * (1.0 - kNeedQ);
+            else {
+                const double step = s.name.rfind("kcd2mp_", 0) == 0 ? kAvatarNeedStepS : kNeedStepS;
+                s.needQ += need > s.needQ ? step * kNeedQ : -step * (1.0 - kNeedQ);
+            }
             if (s.needQ < 0) s.needQ = 0;
         }
     }

@@ -18,7 +18,7 @@ constexpr uint8_t kResultRefused = 0, kResultDone = 1, kResultFault = 2;
 
 // [op][on]: the agent's keep-alive for the push. Without another one the push stops after kPushHoldMs (the agent left).
 constexpr uint8_t kOpPositionPush = 151;
-constexpr uint64_t kPushEveryMs = 50, kPushHoldMs = 15000;
+constexpr uint64_t kPushEveryMs = 33, kPushHoldMs = 15000;   // WO-213: 30 Hz, so the render delay can shrink to 70 ms
 
 // [op][mode 0 close, 1 open, 2 ask][shopEid:4][nameLen][keeper] -> [result][open before][open after]: a joiner's copy of a keeper the host
 // says is ready to sell gets the shop's own open call, because the copy never runs the work activity that makes it.
