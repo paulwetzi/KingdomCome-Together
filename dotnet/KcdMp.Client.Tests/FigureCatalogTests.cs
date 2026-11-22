@@ -46,6 +46,23 @@ public class FigureCatalogTests
     public void Children_tests_and_the_player_are_never_listed(string name) =>
         Assert.Null(FigureCatalog.Build(new[] { Row(name) }, NoText).ByName(name));
 
+    [Theory]
+    [InlineData("kboh_kuratkoDaughter")]
+    [InlineData("kvrc_millersSon")]
+    [InlineData("taboryUCesty_archery_urs_son")]
+    [InlineData("taboryUCesty_shop_henslin_daughter")]
+    [InlineData("ttkc_bailiffSon")]
+    [InlineData("tvid_huntsmansSon")]
+    public void A_soul_named_as_someones_son_or_daughter_is_never_listed(string name) =>
+        Assert.Null(FigureCatalog.Build(new[] { Row(name) }, NoText).ByName(name));
+
+    [Theory]
+    [InlineData("karavanyVeSvete_civilianCaravan_mason_1")]
+    [InlineData("pocestny_prisoner")]
+    [InlineData("pranyr_prisoner_2")]
+    public void A_word_that_only_contains_son_stays_listed(string name) =>
+        Assert.NotNull(FigureCatalog.Build(new[] { Row(name) }, NoText).ByName(name));
+
     [Fact]
     public void A_child_social_class_and_an_animal_are_never_listed()
     {

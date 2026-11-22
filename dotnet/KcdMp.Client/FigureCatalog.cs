@@ -60,6 +60,8 @@ public sealed class FigureCatalog
     // The game's tables have no child flag on a named character. Its name or German title is what says so; when in doubt it stays out.
     private static readonly Regex ChildSkald = new(@"(^|_)(HOLKA|DCERA|SYN|MALEJ|DITE|DETI|KLUK|CHLAPEC|DIVKA)(_|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ChildTitle = new(@"(?<!\p{L})(M(ä|ae)dchen|Kind|Knabe|Junge|Sohn|Tochter)(?!\p{L})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // A soul id that names someone's son or daughter (kboh_kuratkoDaughter, ttkc_bailiffSon, ..._urs_son). Case matters: mason and prisoner stay.
+    private static readonly Regex ChildSoulName = new(@"(?:(?<=[a-z0-9])|^|_)(?:Daughter|Son|Grandson|Granddaughter|Stepson|Stepdaughter)(?=[A-Z0-9_]|$)|(?:^|_)(?:daughter|son|grandson|granddaughter|stepson|stepdaughter)(?=[0-9_]|$)", RegexOptions.CultureInvariant);
     private static readonly Regex EnemyFaction = new("enem|bandit|cuman|kuman", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GuardFaction = new("soldier|guard|militia", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex EnemySkald = new("_(ENEMY|CUMAN)(_|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -92,7 +94,7 @@ public sealed class FigureCatalog
         var seen = new HashSet<Guid>();
         foreach (var r in rows)
         {
-            if (r.Class is not ("NPC" or "NPC_Female") || NotPlayable.IsMatch(r.Name) || NotAWorldSoul.IsMatch(r.Name)
+            if (r.Class is not ("NPC" or "NPC_Female") || NotPlayable.IsMatch(r.Name) || ChildSoulName.IsMatch(r.Name) || NotAWorldSoul.IsMatch(r.Name)
                 || NotAWorldFaction.IsMatch(r.Faction) || ChildClass.IsMatch(r.SocialClass) || ChildSkald.IsMatch(r.Skald)
                 || (r.UiKey.Length > 0 && text.TryGetValue(r.UiKey, out var title) && ChildTitle.IsMatch(title))
                 || !seen.Add(r.Id)) continue;

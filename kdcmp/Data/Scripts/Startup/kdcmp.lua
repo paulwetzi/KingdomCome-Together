@@ -28263,7 +28263,8 @@ do
             M.vp, M.vpAt = { w = w, h = h }, now
         end
         local x = math.floor(M.vp.w * L.xFrac)
-        local y = math.floor(M.vp.h * L.yFrac)
+        -- modified build: with upscaling the viewport is the render size, so a fraction of it lands on the compass
+        local y = math.max(math.floor(M.vp.h * L.yFrac), 165)
         local key = M.KEY_NAMES[M.menuKey] or "Insert"
         if KCD2MP_LookDraw and KCD2MP_LookDraw(x, y, key) then return end   -- modified build: the character window
         System.DrawText(x, y, "Kingdom Come: Together -- mod menu (" .. key .. " to close)", L.title)
@@ -28461,10 +28462,18 @@ do
         local len = math.sqrt(d.x * d.x + d.y * d.y)
         local ux, uy = 0, 1
         if len > 0.01 then ux, uy = d.x / len, d.y / len end
+        local dist = 2.4   -- a wall closer than that: the preview stands in front of it
+        pcall(function()
+            if not (Physics and Physics.RayWorldIntersection and ent_static and ent_terrain and ent_rigid and ent_sleeping_rigid) then return end
+            local hits = {}
+            local n = Physics.RayWorldIntersection({ x = p.x, y = p.y, z = p.z + 1.2 }, { x = ux * dist, y = uy * dist, z = 0 }, 1,
+                ent_static + ent_terrain + ent_rigid + ent_sleeping_rigid, player.id, player.id, hits)
+            if n and n > 0 and hits[1] and hits[1].dist then dist = math.max(0.9, hits[1].dist - 0.5) end
+        end)
         L.previewSeq = (L.previewSeq or 0) + 1
         local name = PREVIEW .. L.previewSeq
         pcall(function()
-            XGenAIModule.SpawnEntity({ Name = name, ClassName = row.cls, Pos = { p.x + ux * 2.4, p.y + uy * 2.4, p.z }, SharedSoulGuid = row.guid })
+            XGenAIModule.SpawnEntity({ Name = name, ClassName = row.cls, Pos = { p.x + ux * dist, p.y + uy * dist, p.z }, SharedSoulGuid = row.guid })
         end)
         local e = nil
         pcall(function() e = System.GetEntityByName(name) end)
