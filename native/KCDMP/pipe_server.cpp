@@ -394,9 +394,7 @@ void send_body_state(HANDLE h, bool ok, uint8_t seq,
 
 // WO-102 Phase 1. Fixed 40 bytes whatever the verdict; seq at body[1] as
 // every reply frame carries it. The body block reuses 0x85's byte order.
-void send_local_state(HANDLE h, bool ok, uint8_t seq, const kcdmp::localstate::LocalState& s,
-                      const kcdmp::motion::State2* st2 = nullptr) {
-    BYTE body[kLocalStateLenV8]{};
+void fill_local_state(BYTE* body, bool ok, uint8_t seq, const kcdmp::localstate::LocalState& s, const kcdmp::motion::State2* st2) {
     body[0] = ok ? 1 : 0;
     body[1] = seq;
     body[2] = s.refuse;
@@ -420,6 +418,12 @@ void send_local_state(HANDLE h, bool ok, uint8_t seq, const kcdmp::localstate::L
     // WO-121: the v8 state block read in the same frame.
     body[40] = st2 ? 1 : 0;
     if (st2) std::memcpy(body + 41, st2, sizeof(*st2));
+}
+
+void send_local_state(HANDLE h, bool ok, uint8_t seq, const kcdmp::localstate::LocalState& s,
+                      const kcdmp::motion::State2* st2 = nullptr) {
+    BYTE body[kLocalStateLenV8]{};
+    fill_local_state(body, ok, seq, s, st2);
     EnterCriticalSection(&g_write_lock);
     send_frame(h, kLocalState, body, sizeof(body));
     LeaveCriticalSection(&g_write_lock);
@@ -1548,6 +1552,28 @@ void listen_loop() {
 }
 
 } // namespace
+
+void push_local_state() {
+    if (!g_connected || g_pipe == INVALID_HANDLE_VALUE || !g_write_lock_ready) return;
+    LARGE_INTEGER q{}, f{};
+    QueryPerformanceCounter(&q);
+    QueryPerformanceFrequency(&f);
+    const uint32_t captureMs = static_cast<uint32_t>(q.QuadPart * 1000 / f.QuadPart);   // the agent's SenderMsNow clock
+    kcdmp::localstate::LocalState ls{};
+    kcdmp::motion::State2 st2{};
+    bool ok = false, ok2 = false;
+    KCDMP_FAULT_CALL(site, "pipe::push_local_state");
+    if (!fault::guarded(site, [&] {
+            ok = kcdmp::localstate::read_local_state(&ls);
+            if (ok) ok2 = kcdmp::motion::read_local_state2(&st2, ls.rotZ);
+        }) || !ok) return;
+    BYTE frame[4 + kLocalStateLenV8]{};
+    std::memcpy(frame, &captureMs, 4);
+    fill_local_state(frame + 4, true, 0, ls, ok2 ? &st2 : nullptr);
+    if (!TryEnterCriticalSection(&g_write_lock)) return;   // the game thread never waits for the pipe's other writer
+    send_frame(g_pipe, kLocalStatePush, frame, sizeof(frame));
+    LeaveCriticalSection(&g_write_lock);
+}
 
 bool start() {
     if (!g_write_lock_ready) { InitializeCriticalSection(&g_write_lock); g_write_lock_ready = true; }

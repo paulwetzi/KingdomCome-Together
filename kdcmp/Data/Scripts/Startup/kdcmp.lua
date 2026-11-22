@@ -12989,6 +12989,7 @@ function KCD2MP_InterpTick(arg, gen)
     if not KCD2MP.interpRunning then return end
     if KCD2MP_DwellTickFromInterp then KCD2MP_DwellTickFromInterp() end   -- WO-110 Phase 6: dwell resumes even with mp_npc_sync off
     if KCD2MP_W172Tick then pcall(KCD2MP_W172Tick) end   -- WO-172 R1/H1 (4 Hz inside)
+    if KCD2MP_W212Tick then pcall(KCD2MP_W212Tick) end   -- WO-212: the keys, the crime switch (1 Hz inside)
     -- WO-78: chain identity, mirroring the puppet tick's WO-69 instrument.
     -- `gen` is nil for the external menu pump (never reschedules, cannot leak)
     -- and for any legacy bare reschedule. The 2026-09-11 field session had no
@@ -19327,6 +19328,7 @@ function W139.ownerName(wuid)
 end
 
 function KCD2MP_W139Report(kind, x, y, z, victim, cls, where)
+    if KCD2MP_W212SwallowCrime and KCD2MP_W212SwallowCrime(kind) then return true end   -- WO-212: this player's crimes are switched off
     local w = KCD2MP.w139
     local side = KCD2MP_W151CrimeReports and KCD2MP_W151CrimeReports()
     if side ~= "joiner" and side ~= "host" then return false end
@@ -20244,6 +20246,7 @@ function KCD2MP_W139Shops(csv)
             w.shops[n] = nil
             mp_log("WO139-SHOP closed npc=" .. n .. " -- no longer ready to sell in the host's world")
             KCD2MP_EmitEvent("w139_shop", n .. " 0")
+            if KCD2MP_W212Shop then KCD2MP_W212Shop(n, 0) end   -- WO-212: the shop's own close
         end
     end
     for n in pairs(want) do
@@ -20255,6 +20258,7 @@ function KCD2MP_W139Shops(csv)
             end
             w.shops[n] = e.id
             KCD2MP_EmitEvent("w139_shop", n .. " 1")
+            if KCD2MP_W212Shop then KCD2MP_W212Shop(n, 1) end   -- WO-212: the shop's own open, so the dialogue finds it
         end
     end
 end
@@ -21311,6 +21315,211 @@ function KCD2MP_W157TalkFree(name)
     end
     w.stats.freed = (w.stats.freed or 0) + 1
     mp_log(string.format("WO157-TALK free npc=%s reset=%s placement=held -- the copy can take the conversation (and a trade)", tostring(name), table.concat(res, ",")))
+end
+
+-- ===== WO-212: the inventory keys, the wanted status and a horse of your own =====
+-- Keys: the combat controller's action filter "no_inventory" can outlive a co-op fight (I, M and the other menu keys stay dead until a
+-- restart). Outside a fight, with no weapon drawn, for 3 s: the DLL makes the controller's own "off" call. "I'm stuck" does it at once.
+-- Crimes: mp_crime_clear makes the NPCs forget and clears this player's record at the host. mp_crimes_off keeps it that way: a new crime
+-- is not reported, and what the game noticed anyway is forgotten again. Each player has their own switch.
+-- Horse: mp_horse_here puts one light, legal, unsaved horse beside this player; pressed again, the same horse comes back.
+KCD2MP.w212 = KCD2MP.w212 or { crimesOff = false, keysAt = -100, tickAt = 0, forgetAt = -100, assertAt = -100 }
+KCD2MP.W212_HORSE = "kcd2mp_ownhorse"
+KCD2MP.W212_HORSE_SOUL = "fc0e6251-b314-4398-b83f-3a66a52961ee"
+KCD2MP.W212_HORSE_COAT = "Objects/characters/animals/horse/body/horse_body_normal6"
+
+function KCD2MP_W212KeysBlocked()
+    if not (ActionMapManager and ActionMapManager.IsFilterEnabled) then return false end
+    local on = false
+    pcall(function() on = ActionMapManager.IsFilterEnabled("no_inventory") == true end)
+    return on
+end
+
+function KCD2MP_W212Fighting()
+    local busy = false
+    pcall(function() busy = player.soul:IsInCombatDanger() == true end)
+    if not busy then pcall(function() busy = player.human:IsWeaponDrawn() == true end) end
+    return busy
+end
+
+function KCD2MP_W212FreeKeys(arg)
+    local a = tostring(arg or "")
+    if a == "test-on" then KCD2MP_EmitEvent("w212_keys", "set test"); return true end
+    KCD2MP_EmitEvent("w212_keys", "free " .. (string.find(a, "^[%w_-]+$") and a or "console"))
+    return true
+end
+
+-- The agent's answer: 1 done, 0 refused (this build's switch is not the known one), 2 a fault, -1 no answer.
+function KCD2MP_W212KeysDone(result, why)
+    mp_log(string.format("WO212-KEYS release why=%s result=%s filter_now=%s", tostring(why), tostring(result), tostring(KCD2MP_W212KeysBlocked())))
+end
+
+function KCD2MP_W212Tick()
+    local w = KCD2MP.w212
+    local now = os.clock()
+    if now - w.tickAt < 1.0 then return end
+    w.tickAt = now
+    if not player then return end
+    if KCD2MP_W212KeysBlocked() and not KCD2MP_W212Fighting() then
+        w.keysSince = w.keysSince or now
+        if now - w.keysSince >= 3.0 and now - w.keysAt >= 6.0 then
+            w.keysAt = now
+            KCD2MP_W212FreeKeys("auto")
+        end
+    else
+        w.keysSince = nil
+    end
+    if w.crimesOff then
+        if now - w.assertAt >= 10.0 then   -- the host keeps this for 30 s: a reconnect needs no extra step
+            w.assertAt = now
+            KCD2MP_EmitEvent("w212_crime", "off")
+        end
+        local joiner = KCD2MP_W139JoinerActive and KCD2MP_W139JoinerActive()
+        if not joiner and now - w.forgetAt >= 5.0 then   -- a joiner's paused guards are only woken for a real crime
+            w.forgetAt = now
+            if KCD2MP_W151Forget then pcall(KCD2MP_W151Forget, 60, "crimes-off") end   -- near only: this runs for as long as the switch is on
+        end
+    end
+end
+
+local function w212Forget(why)
+    local n = 0
+    if KCD2MP_W151Forget then
+        local ok, r = pcall(KCD2MP_W151Forget, 1500, why)
+        if ok then n = tonumber(r) or 0 end
+    end
+    if KCD2MP.w139 then KCD2MP.w139.crimes = {} end
+    KCD2MP_EmitEvent("w212_crime", "clear")
+    return n
+end
+
+function KCD2MP_W212ClearCrimes()
+    local n = w212Forget("menu-clear")
+    mp_log("WO212-CRIME cleared by the player: " .. tostring(n) .. " NPC(s) told to forget, the record at the host cleared")
+    pcall(KCD2MP_ShowNativeToast, "Gesucht-Status und Delikte entfernt.")
+    return true
+end
+
+function KCD2MP_W212SetCrimesOff(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_crimes_off: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    local w = KCD2MP.w212
+    if v ~= nil and v ~= w.crimesOff then
+        w.crimesOff = v
+        if v then w212Forget("crimes-off-on") end
+        KCD2MP_EmitEvent("w212_crime", v and "off" or "on")
+    end
+    mp_log("WO212-TOGGLE mp_crimes_off " .. (w.crimesOff and "on" or "off"))
+    return true
+end
+
+-- A crime while the switch is on: nothing is reported, and the witnesses forget it a moment later.
+function KCD2MP_W212SwallowCrime(kind)
+    local w = KCD2MP.w212
+    if not w.crimesOff then return false end
+    local now = os.clock()
+    if now - w.forgetAt >= 1.5 then
+        w.forgetAt = now
+        Script.SetTimer(1200, function()
+            if KCD2MP_W151Forget then pcall(KCD2MP_W151Forget, 200, "crimes-off:" .. tostring(kind)) end
+        end)
+    end
+    mp_log("WO212-CRIME " .. tostring(kind) .. " not counted (mp_crimes_off)")
+    return true
+end
+
+-- Trade on a joiner: the keeper's copy never runs the work activity that opens its shop, so the game offered Trade and found no shop.
+-- For a keeper the host says is ready to sell, the DLL makes the shop's own open call (mode 1), and the close when that ends (mode 0).
+function KCD2MP_W212Shop(name, mode)
+    local w = KCD2MP.w212
+    w.shopOf = w.shopOf or {}
+    local hex = w.shopOf[name]
+    if mode ~= 0 then
+        local e = nil
+        pcall(function() e = System.GetEntityByName(name) end)
+        if e and e.this and XGenAIModule and XGenAIModule.FindLinks and XGenAIModule.GetEntityByWUID then
+            pcall(function()
+                local links = XGenAIModule.FindLinks(e.this.id, "shopKeeper")
+                local shop = links and links[1] and XGenAIModule.GetEntityByWUID(links[1])
+                if shop and shop.class == "Shop" then hex = string.match(tostring(shop.id), "(%x+)%s*$") end
+            end)
+        end
+    end
+    if not hex then
+        if mode ~= 0 then mp_log("WO212-SHOP npc=" .. tostring(name) .. " has no shop link here -- no trade with this copy") end
+        return false
+    end
+    w.shopOf[name] = mode == 0 and nil or hex
+    KCD2MP_EmitEvent("w212_shop", string.format("%s %d %s", name, mode, hex))
+    return true
+end
+
+function KCD2MP_W212ShopDone(name, mode, result, before, after)
+    mp_log(string.format("WO212-SHOP npc=%s mode=%s result=%s open %s -> %s", tostring(name), tostring(mode), tostring(result), tostring(before), tostring(after)))
+end
+
+local function w212HorseSpot()
+    local q = player:GetWorldPos()
+    local d = player:GetDirectionVector()
+    local l = math.max(0.01, math.sqrt(d.x * d.x + d.y * d.y))
+    local u, v = d.x / l, d.y / l
+    local x, y = q.x + u * 3.5 + v * 2.5, q.y + v * 3.5 - u * 2.5
+    local z = System.GetTerrainElevation({ x = x, y = y, z = 0 })
+    if not z or math.abs(z - q.z) > 2.5 then z = q.z end
+    return x, y, z
+end
+
+local function w212HorseReady(e, x, y, z)
+    pcall(function() e:SetFlags(ENTITY_FLAG_NO_SAVE, 3) end)
+    pcall(function() e:SetMountIsLegal(true) end)
+    pcall(function() e:ChangeAttachmentMaterial("body", KCD2MP.W212_HORSE_COAT) end)
+    pcall(function() e:SetWorldPos({ x = x, y = y, z = z }) end)
+end
+
+function KCD2MP_W212SpawnHorse()
+    if not player then return false end
+    local riding = false
+    pcall(function() riding = player.human:IsMounted() == true end)
+    if riding then
+        pcall(KCD2MP_ShowNativeToast, "Du sitzt schon auf einem Pferd.")
+        return false
+    end
+    local indoors = false
+    if KCD2MP_W195Env and KCD2MP.w195 and KCD2MP.w195.P then
+        pcall(function() indoors = KCD2MP_W195Env(player:GetWorldPos()).indoor == true end)
+    end
+    if indoors then
+        pcall(KCD2MP_ShowNativeToast, "Geh zuerst nach draussen, dann kommt dein Pferd.")
+        mp_log("WO212-HORSE refused: the player is indoors")
+        return false
+    end
+    local okSpot, x, y, z = pcall(w212HorseSpot)
+    if not okSpot then mp_log("WO212-HORSE no spot: " .. tostring(x)); return false end
+    local name = KCD2MP.W212_HORSE
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if e then
+        w212HorseReady(e, x, y, z)
+        mp_log("WO212-HORSE the same horse comes back")
+        pcall(KCD2MP_ShowNativeToast, "Dein Pferd steht neben dir.")
+        return true
+    end
+    local ok, err = pcall(function()
+        XGenAIModule.SpawnEntity({ Name = name, ClassName = "Horse", Pos = { x, y, z }, SharedSoulGuid = KCD2MP.W212_HORSE_SOUL })
+    end)
+    if not ok then
+        mp_log("WO212-HORSE spawn failed: " .. tostring(err))
+        pcall(KCD2MP_ShowNativeToast, "Das Pferd konnte nicht erscheinen.")
+        return false
+    end
+    Script.SetTimer(700, function()
+        local h = nil
+        pcall(function() h = System.GetEntityByName(name) end)
+        if h then w212HorseReady(h, x, y, z) end
+        mp_log("WO212-HORSE spawned=" .. tostring(h ~= nil))
+    end)
+    pcall(KCD2MP_ShowNativeToast, "Dein Pferd steht neben dir.")
+    return true
 end
 
 -- ===== WO-160: the joiner's NPC copies -- one context root cause (docs/WO-160-findings.md) =====
@@ -26704,13 +26913,80 @@ do
 
     -- 5.3 (both): the game's own forgetting, to every NPC near this player that can hold a crime of his:
     -- running brains take it at once; a paused guard copy (a joiner's) gets its brain back for 1.5 s.
+    -- WO-212: this message to a whole town in one frame stopped the game's frame loop for good (a city save, 300 m at once); the same
+    -- 1544 NPCs a few per tick ran without a stall. So the nearest ones hear it now, guards first, and the rest follow in small steps.
+    local W151_FORGET_NOW, W151_FORGET_STEP, W151_FORGET_STEP_MS = 120, 4, 100
+
+    local function w151ForgetSend(e)
+        local t = nil
+        pcall(function() t = XGenAIModule.MakeTableFromType("crime:forgetCrimesData") end)
+        if not t then return false end
+        pcall(function() t.self = e.this.id end)
+        return (pcall(function() XGenAIModule.SendMessageToEntityData(e.this.id, "crime:forgetCrimesData", t) end))
+    end
+
+    local function w151ForgetRepause(woke)
+        if #woke == 0 then return end
+        Script.SetTimer(1500, function()
+            for _, n in ipairs(woke) do
+                if KCD2MP._npcPaused and KCD2MP._npcPaused[n] then pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. n) end
+            end
+        end)
+    end
+
+    local function w151ForgetDrain()
+        local q = W.forgetQueue
+        if not q then return end
+        W.forgetDrainAt = os.clock()
+        local done, woke = 0, {}
+        while done < W151_FORGET_STEP and q.i < #q.ids do
+            q.i = q.i + 1
+            local id = q.ids[q.i]
+            q.pending[tostring(id)] = nil
+            local e = nil
+            pcall(function() e = System.GetEntity(id) end)
+            if e and e.this then
+                local name = nil
+                pcall(function() name = e:GetName() end)
+                if name and KCD2MP._npcPaused and KCD2MP._npcPaused[name] then
+                    pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. name)
+                    woke[#woke + 1] = name
+                end
+                if w151ForgetSend(e) then
+                    q.sent = q.sent + 1
+                    W.crimeStats.forgetNpcs = W.crimeStats.forgetNpcs + 1
+                end
+                done = done + 1
+            end
+        end
+        w151ForgetRepause(woke)
+        if q.i >= #q.ids then
+            W.forgetQueue = nil
+            W.forgetDrainAt = nil
+            mp_log(string.format("WO151-CRIME forget spread done: %d more NPC(s)", q.sent))
+        end
+    end
+
+    -- One running chain: a new one (after a level load dropped the timer) ends the old one.
+    local function w151ForgetStartDrain()
+        W.forgetChain = (W.forgetChain or 0) + 1
+        W.forgetDrainAt = os.clock()
+        local chain = W.forgetChain
+        local function step()
+            if chain ~= W.forgetChain then return end
+            w151ForgetDrain()
+            if W.forgetQueue then Script.SetTimer(W151_FORGET_STEP_MS, step) end
+        end
+        Script.SetTimer(W151_FORGET_STEP_MS, step)
+    end
+
     function KCD2MP_W151Forget(radiusM, why)
         local pp = nil
         pcall(function() pp = player:GetWorldPos() end)
         if not pp then return 0 end
         local ents = {}
         pcall(function() ents = System.GetEntitiesInSphere(pp, radiusM or 150) or {} end)
-        local sent, woke = 0, {}
+        local rows = {}
         for _, e in ipairs(ents) do
             if (e.class == "NPC" or e.class == "NPC_Female") and not (KCD2MP_W139IsAvatar and KCD2MP_W139IsAvatar(e)) and e.this then
                 local name = nil
@@ -26719,28 +26995,38 @@ do
                 local guard = false
                 pcall(function() guard = e.soul:HasScriptContext("crime_isAuthority") == true end)
                 if not paused or guard then
-                    if paused then pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. name); woke[#woke + 1] = name end
-                    local t = nil
-                    pcall(function() t = XGenAIModule.MakeTableFromType("crime:forgetCrimesData") end)
-                    if t then
-                        pcall(function() t.self = e.this.id end)
-                        local ok = pcall(function() XGenAIModule.SendMessageToEntityData(e.this.id, "crime:forgetCrimesData", t) end)
-                        if ok then sent = sent + 1 end
-                    end
+                    local d = 0
+                    pcall(function() local w = e:GetWorldPos(); d = (w.x - pp.x) ^ 2 + (w.y - pp.y) ^ 2 + (w.z - pp.z) ^ 2 end)
+                    rows[#rows + 1] = { e = e, name = name, paused = paused, guard = guard, d = d }
                 end
             end
         end
-        if #woke > 0 then
-            Script.SetTimer(1500, function()
-                for _, n in ipairs(woke) do
-                    if KCD2MP._npcPaused and KCD2MP._npcPaused[n] then pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. n) end
+        table.sort(rows, function(a, b)
+            if a.guard ~= b.guard then return a.guard end
+            return a.d < b.d
+        end)
+        local sent, woke, later = 0, {}, 0
+        for i, r in ipairs(rows) do
+            if i <= W151_FORGET_NOW then
+                if r.paused then pcall(System.ExecuteCommand, "wh_ai_ResumeNPC " .. r.name); woke[#woke + 1] = r.name end
+                if w151ForgetSend(r.e) then sent = sent + 1 end
+            else
+                local q = W.forgetQueue
+                if not q then q = { ids = {}, pending = {}, i = 0, sent = 0 }; W.forgetQueue = q end
+                local id = r.e.id
+                if id ~= nil and not q.pending[tostring(id)] then
+                    q.pending[tostring(id)] = true
+                    q.ids[#q.ids + 1] = id
+                    later = later + 1
                 end
-            end)
+            end
         end
+        w151ForgetRepause(woke)
+        if W.forgetQueue and os.clock() - (W.forgetDrainAt or -100) > 2.0 then w151ForgetStartDrain() end   -- none running
         W.crimeStats.forgets = W.crimeStats.forgets + 1
         W.crimeStats.forgetNpcs = W.crimeStats.forgetNpcs + sent
-        mp_log(string.format("WO151-CRIME forget why=%s npcs=%d woke_guard_copies=%d radius_m=%.0f -- the game's own crime:forgetCrimesData", tostring(why), sent, #woke, radiusM or 150))
-        return sent
+        mp_log(string.format("WO151-CRIME forget why=%s npcs=%d woke_guard_copies=%d radius_m=%.0f later=%d -- the game's own crime:forgetCrimesData", tostring(why), sent, #woke, radiusM or 150, later))
+        return sent + later
     end
 
     -- ---- Phase 3.2: a living NPC through the quest carry --------------------------------------------------
@@ -27443,6 +27729,7 @@ do
         if KCD2MP_W172HudRestore then pcall(KCD2MP_W172HudRestore, "mp_unstuck") end   -- WO-172 UI1: step 1 brings the HUD back too
         local hard = tostring(arg or ""):find("hard", 1, true) ~= nil
         local did = {}
+        if KCD2MP_W212KeysBlocked and KCD2MP_W212KeysBlocked() then KCD2MP_W212FreeKeys("unstuck"); did[#did + 1] = "keys" end   -- WO-212: I, M and the other menu keys
         if KCD2MP_W164Unstuck then   -- WO-164 S3: a seat / bed / work station let go too; a second press within 10 s: beside the partner
             local ok, step = pcall(KCD2MP_W164Unstuck)
             if ok then did[#did + 1] = "seat-reset"; if step == 2 then did[#did + 1] = "beside-partner"; hard = true end end   -- WO-177 B4: step 2 also the hit reaction (what freed the guest)
@@ -27941,8 +28228,7 @@ do
     -- fn = the function the console command's template names (the menu calls exactly that).
     M.ITEMS = {
         { id = "character", group = "Charakter", label = "Charakter wechseln", kind = "action", cmd = "mp_character", fn = "KCD2MP_LookOpen",
-          help = "Waehle aus allen NPCs, wie dich dein Partner sieht. Vor dir steht eine Vorschau." },
-        { id = "name_badges", group = "Display", label = "Partner's name badge", kind = "onoff", save = "NameBadges",
+          help = "Waehle aus allen NPCs, wie dich dein Partner sieht. Vor dir steht eine Vorschau." },        { id = "name_badges", group = "Display", label = "Partner's name badge", kind = "onoff", save = "NameBadges",
           cmd = "mp_name_badges", fn = "KCD2MP_W154SetNameBadges", get = function() return M.nameBadges end,
           help = "Shows your partner's name (and health) above their figure." },
         { id = "ping_line", group = "Display", label = "Ping and clock line", kind = "onoff", save = "PingLine",
@@ -27967,6 +28253,13 @@ do
           get = function() return KCD2MP.w151 ~= nil and KCD2MP.w151.crimeJoint end,
           session = function() if M.hostCrime == nil then return nil end return M.hostCrime == "joint" end,
           help = "Shared: a crime by either of you counts for both. Individual: each answers for his own." },
+        { id = "crime_clear", group = "Gameplay", label = "Gesucht-Status und Delikte entfernen", kind = "action", cmd = "mp_crime_clear", fn = "KCD2MP_W212ClearCrimes",
+          help = "Die Leute in der Umgebung vergessen deine Taten, und dein Eintrag beim Host wird geloescht." },
+        { id = "crimes_off", group = "Gameplay", label = "Delikte ausschalten", kind = "onoff", save = "CrimesOff",
+          cmd = "mp_crimes_off", fn = "KCD2MP_W212SetCrimesOff", get = function() return KCD2MP.w212 ~= nil and KCD2MP.w212.crimesOff end,
+          help = "An: deine neuen Taten zaehlen nicht, Zeugen vergessen sie sofort wieder. Gilt nur fuer dich." },
+        { id = "horse_here", group = "Gameplay", label = "Pferd neben mir", kind = "action", cmd = "mp_horse_here", fn = "KCD2MP_W212SpawnHorse",
+          help = "Stellt ein helles Pferd neben dich, das du legal reiten darfst. Nochmal druecken holt es zurueck. Nach dem Neuladen ist es weg." },
         { id = "fast_travel", group = "Gameplay", label = "Fast travel", kind = "onoff", host = true, save = "FastTravel",
           cmd = "mp_fast_travel", fn = "KCD2MP_W154SetFastTravel",
           get = function() return M.fastTravel end, session = function() return M.hostFt end,
@@ -29230,7 +29523,11 @@ local ok, err = pcall(function()
     System.AddCCommand("mp_chest_sync",          'KCD2MP_W195BSetChestSync(%line)',       "WO-195B: a chest the joiner unlocks (his lockpick or his key) is unlocked in the host's world too -- the game's own Stash:Unlock on the host's chest at that pivot, so a save keeps it; the host only ever unlocks, and only on that claim (default on): mp_chest_sync on|off; bare = report")
     System.AddCCommand("mp_unstuck",             'KCD2MP_W151Unstuck(%line)',             "WO-151: a way out of any stuck player state through the game's own exits (the picker's Back, the mod's holds let go, the actor's StandUp; a fight you are in ends -- WO-154: the game's StopFight, and a joiner's host ends every fight against his figure; hard = also the game's own hit reaction, no damage): mp_unstuck [hard] [fight]")
     System.AddCCommand("mp_join_engine_hold",    'KCD2MP_W151SetJoinHold(%line)',         "WO-151 (host): the world is truly held for a whole join -- the engine's own pause from the join save to its end (at most the join's timeout + 60 s) (default on): mp_join_hold on|off; bare = report")
-    System.AddCCommand("mp_crime_mode",          'KCD2MP_W151SetCrimeMode(%line)',        "WO-151: joint = a crime by either player counts for both (raised in the host's world too, a fine or punishment by either clears both); individual = each answers for his own (WO-139) (default joint): mp_crime_mode joint|individual; bare = report")
+    System.AddCCommand("mp_keys_free",           'KCD2MP_W212FreeKeys(%line)',            "WO-212: releases the stuck no_inventory filter (I, M and the other menu keys)")
+    System.AddCCommand("mp_crime_clear",         'KCD2MP_W212ClearCrimes()',              "WO-212: NPCs forget this player's crimes, the host clears the record")
+    System.AddCCommand("mp_crimes_off",          'KCD2MP_W212SetCrimesOff(%line)',        "WO-212: on = this player's crimes do not count")
+    System.AddCCommand("mp_horse_here",          'KCD2MP_W212SpawnHorse()',               "WO-212: a light, legal, unsaved horse beside this player")
+    System.AddCCommand("mp_crime_mode",         'KCD2MP_W151SetCrimeMode(%line)',        "WO-151: joint = a crime by either player counts for both (raised in the host's world too, a fine or punishment by either clears both); individual = each answers for his own (WO-139) (default joint): mp_crime_mode joint|individual; bare = report")
     System.AddCCommand("mp_ride_owner",          'KCD2MP_W151SetRideOwner(%line)',        "WO-151: one owner for a ridden horse, the rider's mount path -- the horse you sit on (and one a partner's figure rides) is never a puppet, bound, parked, hidden or frozen by the mod, and the host's stream for it waits (default on): mp_ride_owner on|off; bare = report")
     System.AddCCommand("mp_npc_reactions",       'KCD2MP_W151SetNpcReactions(%line)',     "WO-151: a host NPC's hit reaction shows on the joiner's copy (the host sends it; the copy plays it, and runs none of its own reactions while it fights) (default on): mp_npc_reactions on|off; bare = report")
     System.AddCCommand("mp_test_copyfight",      'KCD2MP_W151TestCopyFight(%line)',       "WO-151 test: a copy's 'no own hit reaction' contexts on any body: mp_test_copyfight <npc> on|off")

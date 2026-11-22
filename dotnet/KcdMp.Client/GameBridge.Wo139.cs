@@ -398,7 +398,7 @@ public partial class GameBridge
     /// <summary>WO-121's attributed hit landed on a host NPC: the joiner's assault, or his murder.</summary>
     private void Wo139OnAvatarHit(byte source, string npcName, float health)
     {
-        if (!W139Host || !W139On || !Wo139Text.IsName(npcName)) return;
+        if (!W139Host || !W139On || !Wo139Text.IsName(npcName) || Wo212NoCrime(source)) return;
         long now = Environment.TickCount64;
         string key = $"{source}|{npcName}";
         string? kind = null;
@@ -433,7 +433,7 @@ public partial class GameBridge
     /// <summary>The avatar's takedown took (WO-135 result ok): the joiner's crime, if witnessed.</summary>
     private void Wo139OnTakedownDone(byte src, string npc, string kind)
     {
-        if (!W139Host || !W139On || !Wo139Text.IsName(npc)) return;
+        if (!W139Host || !W139On || !Wo139Text.IsName(npc) || Wo212NoCrime(src)) return;
         Interlocked.Increment(ref _w139Violent);
         string crime = kind == "knockout" ? "knockout" : "murder";
         _ = ExecLuaAsync($"if KCD2MP_W139HostViolent then KCD2MP_W139HostViolent({src}, \"{npc}\", \"{crime}\") end");
@@ -451,6 +451,7 @@ public partial class GameBridge
             {
                 case Protocol.CrimeAskReport when Wo139Rules.TryParseReport(m.Text, out var r):
                     Interlocked.Increment(ref _w139ReportsIn);
+                    if (Wo212NoCrime(src)) { Console.WriteLine($"MP-W212 host: ghost {src}'s {r.Crime} not judged (their crimes are off)"); return; }
                     if (!W139On) { Console.WriteLine($"MP-W139 host: ghost {src}'s {r.Crime} not judged (mp_crime_shared off)"); return; }
                     await ExecLuaAsync(FormattableString.Invariant(
                         $"if KCD2MP_W139HostJudge then KCD2MP_W139HostJudge({src}, {m.Tok}, \"{r.Crime}\", {r.X:F2}, {r.Y:F2}, {r.Z:F2}, \"{(r.Victim.Length > 0 ? r.Victim : "-")}\", \"{(r.Item.Length > 0 ? r.Item : "-")}\", \"{r.Where}\", \"{(_w195StealthWitness ? r.Stealth : "")}\") end"));   // WO-195 2b: the joiner's stealth
@@ -463,6 +464,9 @@ public partial class GameBridge
                     await Wo139HostOutcomeAsync(src, m.Tok, res, guard, fine, x, y, z);
                     return;
                 }
+                case Protocol.CrimeAskClear:
+                    await Wo212HostOnAskAsync(src, m.Text);
+                    return;
                 case Protocol.CrimeAskEndFights when Wo154Rules.TryParseEndFights(m.Text, out string endWhy):
                     await Wo154EndFightsForPeerAsync(src, endWhy);   // WO-154 3.4: his mp_unstuck
                     return;

@@ -191,6 +191,7 @@ public partial class GameBridge
             Interlocked.Increment(ref _w151CrimeOwn);
             foreach (byte peer in Wo134Peers())
             {
+                if (Wo212NoCrime(peer)) continue;   // WO-212: this partner's crimes are switched off
                 var c = new JoinerCrimeRecord.Crime { Id = 0, Kind = f[1], Settlement = settlement, Witnesses = wit, Guards = guards, AtMs = Environment.TickCount64 };
                 bool kept = Wo139Record(peer).Add(c);
                 Console.WriteLine($"MP-W151 crime joint: the host's own {f[1]} ({wit} witness(es), {guards} guard(s) in {(settlement.Length > 0 ? settlement : "the wilds")}) -- ghost {peer} answers for it too{(kept ? "" : " (merged)")}");

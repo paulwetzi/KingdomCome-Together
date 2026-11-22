@@ -37,6 +37,7 @@ public static class Wo154MenuRules
         new("CleanScreen", Kind.OnOff, false),
         new("FriendlyFire", Kind.OnOff, true),
         new("CrimeMode", Kind.Crime, true),
+        new("CrimesOff", Kind.OnOff, false),   // WO-212: each player's own switch
         new("FastTravel", Kind.OnOff, true),
         new("Leash", Kind.OnOff, true),
         new("SleepVote", Kind.OnOff, false),

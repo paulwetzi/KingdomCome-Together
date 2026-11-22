@@ -133,6 +133,7 @@ std::atomic<bool> g_walkFromHost{true};   // WO-201 B10: mp_walk_from_host
 std::atomic<uint32_t> c_extrapFrames{0}, c_extrapEnds{0}, c_silenceKept{0};
 constexpr double kExtrapMaxS = 2.0;        // WO-201 B10: a gap shorter than this is walked through on the host's last speed
 constexpr double kSilenceMovingS = 10.0;   // WO-201 B10: a copy that was moving is not dropped for silence before this
+constexpr double kAvatarExtrapS = 0.25;    // WO-212: how far past its newest sample a partner's figure keeps walking
 constexpr float  kExtrapMinMps = 0.3f, kExtrapMaxMps = 8.0f;
 constexpr double kHoldChainCapS = 1.2, kHoldCooldownS = 0.35;
 std::atomic<uint32_t> c_holdCapped{0}, c_holdCooldown{0};
@@ -504,10 +505,13 @@ bool render(const Stream& s, double renderAt, double delay, float out[4], bool* 
             const double vx = (z.x - y.x) / seg, vy = (z.y - y.y) / seg, vz = (z.z - y.z) / seg;
             const double sp = std::sqrt(vx * vx + vy * vy);
             if (sp >= kExtrapMinMps && sp <= kExtrapMaxMps) {
-                out[0] = static_cast<float>(z.x + vx * past); out[1] = static_cast<float>(z.y + vy * past);
-                out[2] = static_cast<float>(z.z + vz * past); out[3] = z.rot;
+                // WO-212: a partner's figure runs on only for a moment, then waits there. A long straight line ended in a visible pull back.
+                const bool avatar = s.name.rfind("kcd2mp_", 0) == 0;
+                const double run = avatar && past > kAvatarExtrapS ? kAvatarExtrapS : past;
+                out[0] = static_cast<float>(z.x + vx * run); out[1] = static_cast<float>(z.y + vy * run);
+                out[2] = static_cast<float>(z.z + vz * run); out[3] = z.rot;
                 *extrap = true;
-                if (segMps) *segMps = static_cast<float>(sp);
+                if (segMps) *segMps = run < past ? 0.0f : static_cast<float>(sp);
                 return true;
             }
         }

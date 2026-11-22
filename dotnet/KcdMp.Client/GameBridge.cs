@@ -2292,7 +2292,8 @@ public partial class GameBridge(ClientConfig config)
                         if (nat is null) local = await ReadLocalBodyStateAsync(cts.Token);   // log path: the separate 0x09 read, as before
                         _w211LastOwnPos = (x, y, z, rotZ);   // WO-211 A.2.3: where this player stood at a drop
                         await SendPositionAsync(stream, x, y, z, rotZ, riding,
-                                                state2: Wo121State2For(natState2, nowTimestamp, consume: true, out _));
+                                                state2: Wo121State2For(natState2, nowTimestamp, consume: true, out _),
+                                captureMs: nat is null ? null : _combat.LastCaptureMs);
                         // WO-100.5 Phase 3: the accepted input rides the same
                         // read -- one pipe round trip serves both channels.
                         if (local is LocalBodyState lb)
@@ -6061,6 +6062,15 @@ public partial class GameBridge(ClientConfig config)
             case "w151_crime":       // WO-151 Phase 5: joint responsibility (the host's own crime, its resolution)
                 _ = Wo151OnCrimeAsync(arg);
                 return;
+            case "w212_keys":        // WO-212: release the stuck input filter
+                _ = Wo212OnKeysAsync(arg);
+                return;
+            case "w212_crime":       // WO-212: clear | off | on (this player's crimes)
+                _ = Wo212OnCrimeAsync(arg);
+                return;
+            case "w212_shop":        // WO-212: <keeper> <mode> <shop entity hex>
+                _ = Wo212OnShopAsync(arg);
+                return;
             case "w151_door":        // WO-151 3.9: a door of the host's world changed / this joiner used one
                 _ = Wo151OnDoorLocalAsync(arg);
                 return;
@@ -7395,7 +7405,7 @@ public partial class GameBridge(ClientConfig config)
     }
 
     private async Task SendPositionAsync(Stream stream, float x, float y, float z, float rotZ,
-                                         bool isRiding, bool stale = false, BodyState2? state2 = null)
+                                         bool isRiding, bool stale = false, BodyState2? state2 = null, uint? captureMs = null)
     {
         // WO-121 (v8): the WO-100.5 five-byte body state is superseded by the
         // twelve-byte BodyState2 (flag 0x10), change-gated by the caller.
@@ -7408,7 +7418,7 @@ public partial class GameBridge(ClientConfig config)
         // WO-118 follow-up: every packet carries the sender's clock, so the
         // peer's native writer renders this ghost on our timeline, not on its
         // arrival (flag 0x08; STALE heartbeats too -- same place, later time).
-        await WritePacketAsync(stream, PositionCodec.BuildPosition(x, y, z, rotZ, isRiding, stale, state2, SenderMsNow(), Wo127ClaimsHost()));
+        await WritePacketAsync(stream, PositionCodec.BuildPosition(x, y, z, rotZ, isRiding, stale, state2, captureMs ?? SenderMsNow(), Wo127ClaimsHost()));   // WO-212: the moment of the read, when the DLL pushed it
     }
 
     /// <summary>

@@ -67,14 +67,20 @@ public static partial class Protocol
     public const int CrimeTextMax = 1400;
 
     // ---- ask kinds (APPEND-ONLY) ----
-    public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3, CrimeAskEndFights = 4;
+    public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3, CrimeAskEndFights = 4, CrimeAskClear = 5;   // WO-212: "clear" | "off" | "on"
+    /// <summary>WO-212: the native op that releases the input filter "no_inventory".</summary>
+    public const byte Wo212OpInputFilter = 150;
+    /// <summary>WO-212: the keep-alive of the DLL's own position push.</summary>
+    public const byte Wo212OpPositionPush = 151;
+    /// <summary>WO-212: the shop's own open / close call for a joiner's copy of a keeper.</summary>
+    public const byte Wo212OpShopKeeper = 152;
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
                       CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8;
 
     public static string CrimeAskName(byte k) => k switch
     {
-        CrimeAskReport => "report", CrimeAskOutcome => "outcome", CrimeAskResync => "resync", CrimeAskEndFights => "end-fights", _ => $"unknown-{k}",
+        CrimeAskReport => "report", CrimeAskOutcome => "outcome", CrimeAskResync => "resync", CrimeAskEndFights => "end-fights", CrimeAskClear => "clear", _ => $"unknown-{k}",
     };
 
     public static string CrimeHostName(byte k) => k switch
