@@ -13,9 +13,12 @@ public partial class GameBridge
     private readonly ConcurrentDictionary<string, bool> _w208On = new(StringComparer.Ordinal);
 
     /// <summary>A WO-208 switch: on unless the mod said off (a test twin's KCDMP_TEST_W208_OFF=name,name turns it off from the start).</summary>
-    private bool W208(string name) =>
-        _w208On.TryGetValue(name, out bool v) ? v
-            : Wo208Rules.Default(name, Environment.GetEnvironmentVariable("KCDMP_TEST_W208_OFF"), Environment.GetEnvironmentVariable("KCDMP_TEST_W208_ON"));
+    private bool W208(string name)
+    {
+        if (_w208On.TryGetValue(name, out bool v)) return v;
+        string? off = Environment.GetEnvironmentVariable("KCDMP_TEST_W208_OFF"), on = Environment.GetEnvironmentVariable("KCDMP_TEST_W208_ON");
+        return name == "copy_anim_owner" ? Wo208Rules.OwnerDefault(W137Joiner, off, on) : Wo208Rules.Default(name, off, on);
+    }
 
     private async Task Wo208PushConfigAsync()
     {

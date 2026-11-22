@@ -21,6 +21,10 @@ public class Wo208Tests
         Assert.True(Wo208Rules.Default("copy_anim_owner", null, null));                           // the owner ships on (WO-209)
         Assert.False(Wo208Rules.Default("copy_anim_owner", "copy_anim_owner", null));            // the bench's owner-off runs
         Assert.Empty(Wo208Rules.DefaultOff);
+        Assert.True(Wo208Rules.OwnerDefault(joiner: false, null, null));                          // the host keeps streaming its state
+        Assert.False(Wo208Rules.OwnerDefault(joiner: true, null, null));                          // modified build: a joiner's copies run without the owner
+        Assert.True(Wo208Rules.OwnerDefault(joiner: true, null, "copy_anim_owner"));              // the bench can still run it
+        Assert.False(Wo208Rules.OwnerDefault(joiner: false, "copy_anim_owner", null));            // a twin still turns it off
         Assert.Equal(4u, Wo208Rules.ConfigBits(n => n == "defence_local"));
         Assert.Equal(0u, Wo208Rules.ConfigBits(_ => false));
         Assert.Equal(1u, Wo208Rules.ConfigBits(n => n == "conv_cam_player_view"));

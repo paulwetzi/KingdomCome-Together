@@ -18,6 +18,11 @@ public static class Wo208Rules
     public static bool Default(string name, string? twinOff, string? benchOn) =>
         !Wo207Rules.TwinOff(twinOff, name) && (!DefaultOff.Contains(name, StringComparer.Ordinal) || Wo207Rules.TwinOff(benchOn, name));
 
+    /// <summary>Modified build: a joiner's copies run without the owner unless it is switched on by hand or by the bench (the first real session:
+    /// a rejoined joiner's owner could not install on its copies, and the NPCs walked with no animation). The host keeps streaming its state.</summary>
+    public static bool OwnerDefault(bool joiner, string? twinOff, string? benchOn) =>
+        Default("copy_anim_owner", twinOff, benchOn) && (!joiner || Wo207Rules.TwinOff(benchOn, "copy_anim_owner"));
+
     /// <summary>The DLL's switch word (op 130), the same bits as wo208_rules.h kBit*.</summary>
     public static uint ConfigBits(Func<string, bool> on) => (on("conv_cam_player_view") ? 1u : 0u) | (on("target_in_fight") ? 2u : 0u) | (on("defence_local") ? 4u : 0u)
                                                              | (on("copy_anim_owner") ? 8u : 0u);

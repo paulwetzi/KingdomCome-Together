@@ -54,7 +54,7 @@ KCD2MP.labelRunning = false
 KCD2MP.horseGhosts = {}         -- id ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ {entity, entityId, isWorldHorse, worldName} horse per player
 KCD2MP.ghostHorseName = {}      -- id ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ authored name of the horse that player is riding (WO-38 Phase 5, via 0x2B); "" / absent = unknown
 KCD2MP._mountedHorseName = nil  -- authored name of the horse the LOCAL player is on (riding check, Method 0)
-KCD2MP.horseAdoptEnabled = true -- WO-40 Phase 0: mp_horse_adopt on|off -- field escape hatch for the mount-crash suspect (off = proxy horses only)
+KCD2MP.horseAdoptEnabled = false -- WO-40 Phase 0: mp_horse_adopt on|off (off = proxy horses only). Modified build: off by default, a joiner crashed in the mount call on an adopted world horse
 -- WO-40 Phase 9: ghosts are stimulus-deaf BY DEFAULT now. The chain that
 -- earned this: WO-38 recommended it (a ghost has no player behind its
 -- reactions; every stimulus response is noise), WO-39 live-verified
