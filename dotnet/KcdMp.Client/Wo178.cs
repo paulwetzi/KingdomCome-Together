@@ -21,7 +21,7 @@ public static class Wo178Rules
     /// WO-165's skirmish pair (its fight untouched). On since 0.50.6 (the maintainer: the next session is two real players).</summary>
     public const bool DefaultHostLockAnswer = true;
     /// <summary>C4 (1): a joiner's blow waits up to 0.8 s for the figure's strike window.</summary>
-    public const bool DefaultFallbackHold = true;
+    public const bool DefaultFallbackHold = false;   // modified build: the first real session's held blows waited 0.8 s and were then judged by the engine anyway (WO-210 C.4)
     /// <summary>C4 (2): a raw fallback blow costs what the engine's own costs and never floors an NPC.</summary>
     public const bool DefaultFallbackEngineCap = true;
     /// <summary>mp_player_recoil: an enemy copy's blow that lands on the joiner plays his own hit reaction (the engine's, ordinary hits only).</summary>

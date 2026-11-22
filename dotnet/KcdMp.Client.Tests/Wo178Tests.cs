@@ -24,7 +24,7 @@ public class Wo178Tests
         Assert.False(Wo178Rules.DefaultWorldAutosave);      // the maintainer's decision: no scheduled world saves
         Assert.True(Wo178Rules.DefaultQuicksave);
         Assert.True(Wo178Rules.DefaultHostLockAnswer);      // 0.50.6: on (the maintainer)
-        Assert.True(Wo178Rules.DefaultFallbackHold);
+        Assert.False(Wo178Rules.DefaultFallbackHold);   // modified build: the blow is judged at once, the engine takes it without a strike window (WO-210 C.4)
         Assert.True(Wo178Rules.DefaultFallbackEngineCap);
         Assert.True(Wo178Rules.DefaultPlayerRecoil);
         Assert.True(Wo178Rules.DefaultHitReach);
