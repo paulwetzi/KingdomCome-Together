@@ -7,7 +7,7 @@
     Both PCs must get the SAME zip: its build id is part of the connection check.
 #>
 [CmdletBinding()]
-param([string] $BuildId = 'fixedsoul-0.63.9-6')
+param([string] $BuildId = 'fixedsoul-0.63.9-7')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $out = Join-Path $root 'release\FixedSoul'
@@ -19,10 +19,22 @@ if ($LASTEXITCODE -ne 0) { throw 'the pak build failed' }
 & dotnet build (Join-Path $root 'dotnet\KcdMp.Client\KcdMp.Client.csproj') -c Release --nologo -v q --no-incremental
 if ($LASTEXITCODE -ne 0) { throw 'the agent build failed' }
 
+# The native plugin (MSVC x64, the game's ABI): built after BUILD_ID is written, it carries the build id.
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $vs) { throw 'Visual Studio with the C++ tools was not found' }
+$cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+$nativeBuild = Join-Path $root 'release\native-build'
+& $cmake -S (Join-Path $root 'native') -B $nativeBuild -G 'Visual Studio 17 2022' -A x64 -DKCDMP_BUILD_EXPERIMENTS=OFF | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'the native configure failed' }
+& $cmake --build $nativeBuild --config Release --target KCDMP --parallel -- /nologo /v:quiet
+if ($LASTEXITCODE -ne 0) { throw 'the native build failed' }
+
 $bin = Join-Path $root 'dotnet\KcdMp.Client\bin\Release\net8.0'
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 Copy-Item (Join-Path $bin 'KcdMpClient.dll'), (Join-Path $bin 'KcdMp.Protocol.dll') $out
+Copy-Item (Join-Path $nativeBuild 'KCDMP\Release\KCDMP.dll') $out
 Copy-Item (Join-Path $root 'kdcmp\Data\kdcmp.pak') $out
 Copy-Item (Join-Path $PSScriptRoot 'Install-FixedSoul.ps1') $out
 Copy-Item (Join-Path $root 'docs\FIXED-SOULS.md'), (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE'), (Join-Path $root 'AUTHORS') $out

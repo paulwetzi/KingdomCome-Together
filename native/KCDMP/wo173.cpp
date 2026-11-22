@@ -374,6 +374,7 @@ uint8_t do_real_hit(const uint8_t* body, size_t len, uint8_t* out, size_t cap, s
         wo165::Request rq{};
         rq.attackerEid = avatarEid; rq.victimEid = veid; rq.fields = f;
         rq.strikeForCall = strikeForCall;
+        rq.createVictimCa = true;   // modified build: this runs on the host, on its own NPC (a calm one has no combat actor until its first fight)
         rq.flags = wo165::kFlagSkipFilter | wo165::kFlagIntended | (g_reactOn.load() && !g_reactFaulted.load() ? wo165::kFlagReact : 0);
         rr = wo165::replay(rq);
         if (rr.reason != wo165::kOk) {

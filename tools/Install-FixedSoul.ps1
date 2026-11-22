@@ -47,6 +47,7 @@ if (-not $ModDir) {
 $Targets = @(
     @{ Key = 'APP|KcdMpClient.dll';            Path = Join-Path $InstallDir 'KcdMpClient.dll';            From = 'KcdMpClient.dll' },
     @{ Key = 'APP|KcdMp.Protocol.dll';         Path = Join-Path $InstallDir 'KcdMp.Protocol.dll';         From = 'KcdMp.Protocol.dll' },
+    @{ Key = 'APP|KCDMP.dll';                  Path = Join-Path $InstallDir 'KCDMP.dll';                  From = 'KCDMP.dll' },
     @{ Key = 'MOD|Data\kdcmp.pak';             Path = Join-Path $ModDir 'Data\kdcmp.pak';                 From = 'kdcmp.pak' },
     @{ Key = 'APP|mod\kdcmp\Data\kdcmp.pak';   Path = Join-Path $InstallDir 'mod\kdcmp\Data\kdcmp.pak';   From = 'kdcmp.pak' }
 )
@@ -73,6 +74,11 @@ if (-not (Test-Path $Backup)) {
     New-Item -ItemType Directory -Force -Path $Backup | Out-Null
     foreach ($t in $Targets) { if (Test-Path $t.Path) { Copy-Item $t.Path (Join-Path $Backup ($t.Key -replace '[|\\]', '_')) -Force } }
     Copy-Item $Manifest (Join-Path $Backup 'install-manifest.txt') -Force
+}
+# A backup made by an older package lacks files this one replaces for the first time (the official KCDMP.dll): keep them for -Uninstall.
+foreach ($t in $Targets) {
+    $saved = Join-Path $Backup ($t.Key -replace '[|\\]', '_')
+    if ((Test-Path $t.Path) -and -not (Test-Path $saved)) { Copy-Item $t.Path $saved -Force }
 }
 
 $lines = [IO.File]::ReadAllLines($Manifest)

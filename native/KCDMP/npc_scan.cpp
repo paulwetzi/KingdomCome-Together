@@ -128,7 +128,8 @@ void* g_classHorse = nullptr;
 // as not-human bodies. Optional: a class this build lacks is simply not scanned.
 // The WO-191 follow-up: and the village dogs (class Dog). Reported as candidates
 // always; the mod's mp_dog_sync decides whether they are streamed.
-void* g_classAnimal[4] = {};
+// Modified build: and the farm animals; the mod's mp_farm_sync streams only the ones placed in the level (same name on both machines).
+void* g_classAnimal[9] = {};
 bool  g_classesResolved = false;
 bool  g_announced = false;
 uint8_t g_lastRefuse = 0xFF;
@@ -144,8 +145,8 @@ bool resolve_classes(void* entitySystem) {
     if (!call_vtbl1(kVtblClassRegistryFindClass, registry, npcF, &cNpcF) || !cNpcF) return false;
     if (!call_vtbl1(kVtblClassRegistryFindClass, registry, horse, &cHorse) || !cHorse) return false;
     g_classNpc = cNpc; g_classNpcFemale = cNpcF; g_classHorse = cHorse;
-    static const char* const kAnimals[4] = { "Wolf", "WildDog", "Boar", "Dog" };
-    for (int i = 0; i < 4; ++i) {
+    static const char* const kAnimals[9] = { "Wolf", "WildDog", "Boar", "Dog", "SheepEwe", "SheepRam", "Pig", "CattleCow", "CattleBull" };
+    for (int i = 0; i < 9; ++i) {
         void* c = nullptr;
         if (call_vtbl1(kVtblClassRegistryFindClass, registry, kAnimals[i], &c) && c) g_classAnimal[i] = c;
     }

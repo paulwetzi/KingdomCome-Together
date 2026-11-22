@@ -194,7 +194,7 @@ Result replay(const Request& rq) {
     void* vCa = nullptr; void* vModel = nullptr;
     const bool victimIsPlayer = veid == peid;
     const bool vok = victimIsPlayer ? motion::player_combat_parts(&vCa, &vModel)
-                                    : motion::combat_parts(veid, (rq.flags & kFlagCreateCa) != 0, &vCa, &vModel);
+                                    : motion::combat_parts(veid, (rq.flags & kFlagCreateCa) != 0 || rq.createVictimCa, &vCa, &vModel);
     if (!vok || vCa == aCa) { res.reason = kNoVictim; c_refused.fetch_add(1); return res; }
     void* rpg = nullptr; void* back = nullptr;
     if (!rd(aCa, g_rpgOffset, &rpg) || !is_a(rpg, g_vftRpg) || !rd(rpg, 8, &back) || back != aCa) { res.reason = kNoProcessor; c_refused.fetch_add(1); return res; }

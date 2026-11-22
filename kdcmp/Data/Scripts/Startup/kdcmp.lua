@@ -7983,7 +7983,7 @@ function KCD2MP_NpcResyncBurst(reason)
             if n >= MP_NPC_RESYNC_MAX then break end
             local cls = e.class
             local isHorse = (cls == "Horse") or KCD2MP_W136IsAnimalClass(cls)   -- WO-136: encounter animals too (not human)
-                or (cls == "Dog" and KCD2MP_DogSyncStreams(cls, e:GetName()))   -- the WO-191 follow-up: village dogs
+                or (cls == "Dog" and KCD2MP_DogSyncStreams(cls, e:GetName())) or KCD2MP_FarmSyncStreams(cls, e:GetName())   -- the WO-191 follow-up: village dogs; modified build: farm animals
             if (cls == "NPC" or cls == "NPC_Female" or isHorse) and not mp_is_mod_entity(e)
                and not (isHorse and KCD2MP._mountedHorseName and e:GetName() == KCD2MP._mountedHorseName) then
                 local name = e:GetName()
@@ -8315,7 +8315,7 @@ function KCD2MP_NpcScanCompare()
                 seenEnt[key] = true
                 local cls = e.class
                 local isHorse = (cls == "Horse") or KCD2MP_W136IsAnimalClass(cls)   -- WO-136
-                    or (cls == "Dog" and KCD2MP_DogSyncStreams(cls, e:GetName()))   -- the WO-191 follow-up: village dogs
+                    or (cls == "Dog" and KCD2MP_DogSyncStreams(cls, e:GetName())) or KCD2MP_FarmSyncStreams(cls, e:GetName())   -- the WO-191 follow-up: village dogs; modified build: farm animals
                 local isHuman = (cls == "NPC" or cls == "NPC_Female")
                 if (isHuman or isHorse) and not mp_is_mod_entity(e)
                    and not (isHorse and KCD2MP._mountedHorseName and e:GetName() == KCD2MP._mountedHorseName) then
@@ -8559,7 +8559,7 @@ local function mp_npc_rescan()
         local isHorse = (cls == "Horse")
         local isHuman = (cls == "NPC" or cls == "NPC_Female")
         local isDog = cls == "Dog" and KCD2MP_DogSyncStreams(cls, e:GetName())   -- the WO-191 follow-up (mp_dog_sync): village dogs, like the animals
-        local isAnimal = KCD2MP_W136IsAnimalClass(cls) or isDog
+        local isAnimal = KCD2MP_W136IsAnimalClass(cls) or isDog or KCD2MP_FarmSyncStreams(cls, e:GetName())   -- modified build: farm animals
         if (isHuman or isHorse or isAnimal) and not mp_is_mod_entity(e)
            and not (isHorse and KCD2MP._mountedHorseName and e:GetName() == KCD2MP._mountedHorseName)
            and not (isHorse and KCD2MP_W136AvatarRides and KCD2MP_W136AvatarRides(e:GetName()))   -- WO-136 Phase 3: its rider streams it
@@ -30974,6 +30974,25 @@ function KCD2MP_DogSyncStreams(cls, name)
     return true
 end
 
+-- Modified build: farm animals placed in the level have the same name on both machines, so they travel like the village dogs and a
+-- partner's blow lands on the host's animal. Animals the game spawns at random have a different name per machine and stay local.
+KCD2MP.farmSync = KCD2MP.farmSync or { on = true, classes = { SheepEwe = true, SheepRam = true, Pig = true, CattleCow = true, CattleBull = true } }
+function KCD2MP_FarmSyncClass(cls)
+    return KCD2MP.farmSync.on == true and KCD2MP.farmSync.classes[tostring(cls)] == true
+end
+function KCD2MP_FarmSyncStreams(cls, name)
+    if not KCD2MP_FarmSyncClass(cls) then return false end
+    return string.find(tostring(name), "^SpawnedAnimal_") == nil
+end
+function KCD2MP_FarmSyncSet(arg)
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_farm_sync: expected on|off"); return false end
+    if v ~= nil then KCD2MP.farmSync.on = v end
+    mp_log("FARM-SYNC toggle mp_farm_sync " .. (KCD2MP.farmSync.on and "on" or "off") .. " -- farm animals placed in the level travel in the NPC stream")
+    return true
+end
+System.AddCCommand("mp_farm_sync", 'KCD2MP_FarmSyncSet(%line)', "Modified build: (both) sheep, pigs and cattle placed in the level are the host's, so a partner's blow counts (default on): mp_farm_sync on|off")
+
 -- The joiner: a host stream naming this world's own Mutt is never applied (a frozen Mutt does not follow its player).
 function KCD2MP_DogSyncRefuseInbound(name)
     if not KCD2MP.dogSync.on or not KCD2MP_W131IsPlayersDog(name) then return false end
@@ -30988,7 +31007,9 @@ end
 -- The joiner's release (KCD2MP_W131ParkReleased): a dog copy the stream stops driving is paused where it stands and shown, the way
 -- WO-153 2 keeps a dog the host never streamed. true = handled.
 function KCD2MP_DogSyncReleasePaused(name, e, why)
-    if not KCD2MP.dogSync.on or not e or tostring(e.class) ~= "Dog" then return false end
+    if not e then return false end
+    local cl = tostring(e.class)
+    if not ((KCD2MP.dogSync.on and cl == "Dog") or KCD2MP_FarmSyncClass(cl)) then return false end
     local w = KCD2MP.w131
     pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. tostring(name))
     w.pausedAnimals[name] = os.clock()

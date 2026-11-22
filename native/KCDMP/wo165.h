@@ -46,6 +46,9 @@ struct Request {
     // put back right after, in the same call -- no frame sees it): the engine judges the victim's block only against a striking attacker,
     // and a partner's figure inside its own hit reaction has no strike window when his blow arrives (the old way: the capped raw path)
     bool strikeForCall = false;
+    // Modified build: the host's own NPC that never fought has no combat actor yet: the engine's getter makes it, as a real first contact
+    // does (the first real session lost a joiner's blows as no-victim-combat-actor). Never for a joiner's copies.
+    bool createVictimCa = false;
 };
 
 enum Reason : uint8_t {
