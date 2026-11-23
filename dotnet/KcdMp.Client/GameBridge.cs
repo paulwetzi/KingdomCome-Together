@@ -6068,6 +6068,9 @@ public partial class GameBridge(ClientConfig config)
             case "w212_crime":       // WO-212: clear | off | on (this player's crimes)
                 _ = Wo212OnCrimeAsync(arg);
                 return;
+            case "w214_horse":       // WO-214: <x> <y> <z> <rot> here|ridden|gone (this player's called horse)
+                _ = Wo214OnHorseAsync(arg);
+                return;
             case "w212_shop":        // WO-212: <keeper> <mode> <shop entity hex>
                 _ = Wo212OnShopAsync(arg);
                 return;

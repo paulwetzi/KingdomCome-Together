@@ -96,4 +96,45 @@ public partial class GameBridge
         await Wo139SendAsync(Protocol.CrimeHostUp, peer, Protocol.CrimeHostCleared, 0, Wo139Rules.ClearedText("partner-persuaded", null));
         Console.WriteLine($"MP-W212 host: ghost {peer}'s record cleared ({n} crime(s)) -- {why}");
     }
+
+    /// <summary>WO-214, <c>w214_horse &lt;x&gt; &lt;y&gt; &lt;z&gt; &lt;rot&gt; here|ridden|gone</c>: this player's called horse, told to the partners.</summary>
+    private async Task Wo214OnHorseAsync(string? arg)
+    {
+        string text = (arg ?? "").Trim();
+        if (!Wo214Horse.TryParse(text, out _)) return;
+        if (W139Joiner)
+        {
+            await Wo139SendAsync(Protocol.CrimeAskUp, Protocol.JoinTargetHost, Protocol.CrimeAskHorse, 0, text);
+            return;
+        }
+        if (!W139Host) return;
+        foreach (byte peer in Wo134Peers()) await Wo139SendAsync(Protocol.CrimeHostUp, peer, Protocol.CrimeHostPeerHorse, _myGhostId, text);
+    }
+
+    /// <summary>Host: a joiner's horse is shown here and passed on to any other joiner.</summary>
+    private async Task Wo214HostOnAskAsync(byte src, string text)
+    {
+        if (!Wo214Horse.TryParse(text, out var horse)) return;
+        await Wo214ShowAsync(src, horse);
+        foreach (byte peer in Wo134Peers())
+            if (peer != src) await Wo139SendAsync(Protocol.CrimeHostUp, peer, Protocol.CrimeHostPeerHorse, src, text);
+    }
+
+    private Task Wo214ShowAsync(byte owner, Wo214Horse h) => ExecLuaAsync(FormattableString.Invariant(
+        $"if KCD2MP_W214PeerHorse then KCD2MP_W214PeerHorse(\"{owner}\", {h.X:F2}, {h.Y:F2}, {h.Z:F2}, {h.Rot:F3}, \"{h.State}\") end"));
+}
+
+/// <summary>WO-214: the one text a called horse crosses the wire as. Checked field by field on both ends.</summary>
+internal readonly record struct Wo214Horse(float X, float Y, float Z, float Rot, string State)
+{
+    public static bool TryParse(string? text, out Wo214Horse horse)
+    {
+        horse = default;
+        var f = (text ?? "").Split(' ');
+        if (f.Length != 5 || f[4] is not ("here" or "ridden" or "gone")) return false;
+        if (!Wo139Text.TryCoord(f[0], out float x) || !Wo139Text.TryCoord(f[1], out float y) || !Wo139Text.TryCoord(f[2], out float z)
+            || !Wo139Text.TryCoord(f[3], out float rot)) return false;
+        horse = new Wo214Horse(x, y, z, rot, f[4]);
+        return true;
+    }
 }

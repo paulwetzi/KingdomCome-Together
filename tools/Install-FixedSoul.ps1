@@ -53,8 +53,44 @@ $Targets = @(
 )
 $Manifest = Join-Path $InstallDir 'install-manifest.txt'
 
+# The Modding Tools ship without the facial animations, so in that build nobody's lips move ("Lipsync animation ... not found").
+# The retail game next to them has them: hard links add them without using any disk space. Only links made here are ever removed.
+$ToolsRoot = Split-Path (Split-Path $ModDir)
+$FacialTo = Join-Path $ToolsRoot 'Data\Facials'
+$FacialFrom = Join-Path (Split-Path $ToolsRoot) 'KingdomComeDeliverance2\Data\Facials'
+$FacialList = Join-Path $InstallDir 'facial-links.txt'
+
+function Add-FacialLinks {
+    if (-not (Test-Path $FacialFrom)) { Write-Host "Lip sync: no retail game at $FacialFrom, left as it is." -ForegroundColor Yellow; return }
+    New-Item -ItemType Directory -Force -Path $FacialTo | Out-Null
+    $made = @()
+    foreach ($f in Get-ChildItem -LiteralPath $FacialFrom -File -Filter 'Facials_*.pak') {
+        $to = Join-Path $FacialTo $f.Name
+        if (-not (Test-Path -LiteralPath $to)) {
+            try { New-Item -ItemType HardLink -Path $to -Target $f.FullName | Out-Null }
+            catch { Write-Host "Lip sync: could not link $($f.Name) (the game and the Modding Tools must be on one drive)." -ForegroundColor Yellow; continue }
+        }
+        if ((Get-Item -LiteralPath $to).LinkType -eq 'HardLink') { $made += $f.Name }
+    }
+    if ($made.Count -gt 0) {
+        [IO.File]::WriteAllLines($FacialList, [string[]]$made, (New-Object Text.UTF8Encoding($false)))
+        Write-Host "Lip sync: $($made.Count) facial pak(s) linked from the retail game." -ForegroundColor Green
+    }
+}
+
+function Remove-FacialLinks {
+    if (-not (Test-Path $FacialList)) { return }
+    foreach ($n in [IO.File]::ReadAllLines($FacialList)) {
+        $to = Join-Path $FacialTo $n
+        if ((Test-Path -LiteralPath $to) -and (Get-Item -LiteralPath $to).LinkType -eq 'HardLink') { Remove-Item -LiteralPath $to -Force }
+    }
+    if ((Test-Path $FacialTo) -and -not (Get-ChildItem -LiteralPath $FacialTo -Force)) { Remove-Item -LiteralPath $FacialTo -Force }
+    Remove-Item -LiteralPath $FacialList -Force
+}
+
 if ($Uninstall) {
     if (-not (Test-Path $Backup)) { Fail "no backup in $Backup." }
+    Remove-FacialLinks
     foreach ($t in $Targets) {
         $saved = Join-Path $Backup ($t.Key -replace '[|\\]', '_')
         if (Test-Path $saved) { Copy-Item $saved $t.Path -Force }
@@ -93,12 +129,13 @@ foreach ($t in $Targets) {
     }
 }
 [IO.File]::WriteAllLines($Manifest, $lines, (New-Object Text.UTF8Encoding($false)))
+Add-FacialLinks
 
 if ($PlayerName) {
     $json = @{ $PlayerName = $Soul } | ConvertTo-Json -Compress
     [IO.File]::WriteAllText((Join-Path $InstallDir 'fixed-souls.json'), $json, (New-Object Text.UTF8Encoding($false)))
     Write-Host "Mapping written: $Soul" -ForegroundColor Green
 } elseif (-not (Test-Path (Join-Path $InstallDir 'fixed-souls.json'))) {
-    Write-Host 'Im Spiel: Einfg druecken, dann Charakter wechseln.' -ForegroundColor Cyan
+    Write-Host 'In the game: press Insert, then Change character.' -ForegroundColor Cyan
 }
 Write-Host "Installed into $InstallDir and $ModDir" -ForegroundColor Green

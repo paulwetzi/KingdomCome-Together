@@ -174,14 +174,14 @@ do
     check("W4: keys wait while the list loads", key("down") == true and L.sel == 1)
     page("stale", "x", { { "n", "g0", "old" } })
     check("W5: an answer for another page is ignored", L.waiting == true and #L.rows == 0)
-    page("root", "Charakter waehlen", { { "r", "none", "Standardfigur" }, { "n", "g0", "Frauen (2)" } })
+    page("root", "Choose character", { { "r", "none", "Default figure" }, { "n", "g0", "Women (2)" } })
     check("W6: the page arrives", L.waiting == false and #L.rows == 2 and L.sel == 1)
     frame()
     check("W7: PgDn moves, and wraps at the end", key("down") and L.sel == 2 and key("down") and L.sel == 1 and key("up") and L.sel == 2)
     mark = #LOG
     key("change")
     check("W8: End on a group asks for it", evt("fig_list", "g0", mark) == 1 and L.waiting == true)
-    page("g0", "Frauen", { { "b", "root", "< Zurueck" }, { "s", "ttkc_woman_9", "Magd 9", G1, "NPC_Female" }, { "s", "tvez_woman_3", "Frau 3 (!)", G2, "NPC_Female" } })
+    page("g0", "Women", { { "b", "root", "< Back" }, { "s", "ttkc_woman_9", "Maid 9", G1, "NPC_Female" }, { "s", "tvez_woman_3", "Woman 3 (!)", G2, "NPC_Female" } })
     check("W9: a page starts on its first entry, not on Back", L.sel == 2)
 
     local before = #SPAWNS
@@ -202,13 +202,13 @@ do
     P_DANGER = true
     mark = #LOG
     key("change")
-    check("W15: not during a fight", evt("fig_pick", "", mark) == 0 and tostring(L.note):find("Kampf", 1, true) ~= nil)
+    check("W15: not during a fight", evt("fig_pick", "", mark) == 0 and tostring(L.note):find("fight", 1, true) ~= nil)
     P_DANGER = false
     mark = #LOG
     key("change")
     check("W16: End chooses the character", evt("fig_pick", "tvez_woman_3", mark) == 1)
-    KCD2MP_FigureCurrent("tvez_woman_3", "Frau 3", true)
-    check("W17: the player is told", L.cur == "tvez_woman_3" and tostring(L.note):find("Frau 3", 1, true) ~= nil)
+    KCD2MP_FigureCurrent("tvez_woman_3", "Woman 3", true)
+    check("W17: the player is told", L.cur == "tvez_woman_3" and tostring(L.note):find("Woman 3", 1, true) ~= nil)
     frame()
 
     key("toggle")

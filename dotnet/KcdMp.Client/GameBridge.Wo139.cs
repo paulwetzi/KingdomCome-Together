@@ -464,6 +464,9 @@ public partial class GameBridge
                     await Wo139HostOutcomeAsync(src, m.Tok, res, guard, fine, x, y, z);
                     return;
                 }
+                case Protocol.CrimeAskHorse:
+                    await Wo214HostOnAskAsync(src, m.Text);
+                    return;
                 case Protocol.CrimeAskClear:
                     await Wo212HostOnAskAsync(src, m.Text);
                     return;
@@ -526,6 +529,9 @@ public partial class GameBridge
                     Console.WriteLine($"MP-W139 joiner: the host cleared my record in {(cst.Length > 0 ? cst : "every settlement")} ({why})");
                     Wo211CrimesCleared();
                     await ExecLuaAsync($"if KCD2MP_W139Cleared then KCD2MP_W139Cleared(\"{why}\") end");
+                    return;
+                case Protocol.CrimeHostPeerHorse when m.Tok <= byte.MaxValue && Wo214Horse.TryParse(m.Text, out var peerHorse):
+                    await Wo214ShowAsync((byte)m.Tok, peerHorse);
                     return;
                 case Protocol.CrimeHostMode when Wo139Rules.TryParseMode(m.Text, out bool mon, out string mwhy):
                     if (!_w139HostModeKnown || mon != _w139HostModeOn) Console.WriteLine($"MP-W139 joiner: the host's crime sharing is {(mon ? "ON" : "OFF")} ({mwhy})");

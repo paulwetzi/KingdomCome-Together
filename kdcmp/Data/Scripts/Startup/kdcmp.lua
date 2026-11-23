@@ -4951,6 +4951,9 @@ end
 -- test would miss every renamed ghost.
 local function mp_is_mod_entity(e)
     if KCD2MP.look and KCD2MP.look.previewEnt == e and e ~= nil then return true end   -- modified build: the character preview
+    for _, c in pairs(KCD2MP.w214 and KCD2MP.w214.copies or {}) do   -- WO-214: a partner's called horse
+        if c.entity == e then return true end
+    end
     for _, g in pairs(KCD2MP.ghosts) do
         if g.entity == e then return true end
     end
@@ -11203,7 +11206,7 @@ function KCD2MP_SetGhostHorse(id, name)
 
     local hd = KCD2MP.horseGhosts[id]
     local ghost = KCD2MP.ghosts[id]
-    if name ~= "" and hd and not hd.isWorldHorse and ghost and ghost.istate
+    if name ~= "" and KCD2MP.horseAdoptEnabled ~= false and hd and not hd.isWorldHorse and ghost and ghost.istate
        and ghost.istate.isRiding then
         local world = nil
         pcall(function() world = System.GetEntityByName(name) end)
@@ -13580,6 +13583,7 @@ function KCD2MP_InterpTick(arg, gen)
             end
             KCD2MP._mountedHorseName = mountName
             local wire = mountName or "-"
+            if wire == KCD2MP.W212_HORSE then wire = "-" end   -- WO-214: every player's called horse has this name, so it never identifies one
             local nowC = os.clock()
             if wire ~= KCD2MP._horseInfoSentName
                or (mountName and (nowC - (KCD2MP._horseInfoSentAt or 0)) > 30) then
@@ -13805,6 +13809,7 @@ function KCD2MP_RemoveGhost(id)
     if not ghost then return end
     -- WO-174: a figure that leaves takes its fight records with it (hostile pairs, a punch's fight) -- before its body goes
     if KCD2MP_W174Clean then pcall(KCD2MP_W174Clean, "leave", ghost.entity) end
+    if KCD2MP_W214RemoveCopy then pcall(KCD2MP_W214RemoveCopy, id) end   -- WO-214
     -- Remove horse ghost first (if riding)
     KCD2MP_RemoveHorse(id)
     -- WO-27: was a single unchecked System.RemoveEntity. It returns without
@@ -20245,24 +20250,40 @@ function KCD2MP_W139Shops(csv)
     local w = KCD2MP.w139
     local want = {}
     for n in string.gmatch(tostring(csv or ""), "[%w_]+") do want[n] = true end
+    -- WO-214: the host's list changes as keepers walk in and out of range. The game's own shop is closed only when a keeper is still
+    -- missing from the next list too, and a keeper's entity id is compared by value: each read of it is a new Lua object.
+    w.shopGone = w.shopGone or {}
+    local stillOpen = {}
+    for n, passes in pairs(w.shopGone) do
+        if want[n] then
+            w.shopGone[n] = nil
+            stillOpen[n] = true
+        elseif passes >= 1 then
+            w.shopGone[n] = nil
+            if KCD2MP_W212Shop then KCD2MP_W212Shop(n, 0) end   -- WO-212: the shop's own close
+        else
+            w.shopGone[n] = passes + 1
+        end
+    end
     for n in pairs(w.shops) do
         if not want[n] then
             w.shops[n] = nil
+            w.shopGone[n] = 0
             mp_log("WO139-SHOP closed npc=" .. n .. " -- no longer ready to sell in the host's world")
             KCD2MP_EmitEvent("w139_shop", n .. " 0")
-            if KCD2MP_W212Shop then KCD2MP_W212Shop(n, 0) end   -- WO-212: the shop's own close
         end
     end
     for n in pairs(want) do
         local e = nil
         pcall(function() e = System.GetEntityByName(n) end)
-        if e and e.soul and w.shops[n] ~= e.id then
+        local id = e and tostring(e.id) or nil
+        if e and e.soul and w.shops[n] ~= id then
             if not w.shops[n] then
                 mp_log("WO139-SHOP open npc=" .. n .. " -- ready to sell in the host's world: Trade is offered here too")
             end
-            w.shops[n] = e.id
+            w.shops[n] = id
             KCD2MP_EmitEvent("w139_shop", n .. " 1")
-            if KCD2MP_W212Shop then KCD2MP_W212Shop(n, 1) end   -- WO-212: the shop's own open, so the dialogue finds it
+            if KCD2MP_W212Shop and not stillOpen[n] then KCD2MP_W212Shop(n, 1) end   -- WO-212: the shop's own open, so the dialogue finds it
         end
     end
 end
@@ -21364,6 +21385,7 @@ function KCD2MP_W212Tick()
     if now - w.tickAt < 1.0 then return end
     w.tickAt = now
     if not player then return end
+    if KCD2MP_W214OwnHorseTick then pcall(KCD2MP_W214OwnHorseTick, now) end   -- WO-214
     if KCD2MP_W212KeysBlocked() and not KCD2MP_W212Fighting() then
         w.keysSince = w.keysSince or now
         if now - w.keysSince >= 3.0 and now - w.keysAt >= 6.0 then
@@ -21400,7 +21422,7 @@ end
 function KCD2MP_W212ClearCrimes()
     local n = w212Forget("menu-clear")
     mp_log("WO212-CRIME cleared by the player: " .. tostring(n) .. " NPC(s) told to forget, the record at the host cleared")
-    pcall(KCD2MP_ShowNativeToast, "Gesucht-Status und Delikte entfernt.")
+    pcall(KCD2MP_ShowNativeToast, "Wanted status and crimes cleared.")
     return true
 end
 
@@ -21485,7 +21507,7 @@ function KCD2MP_W212SpawnHorse()
     local riding = false
     pcall(function() riding = player.human:IsMounted() == true end)
     if riding then
-        pcall(KCD2MP_ShowNativeToast, "Du sitzt schon auf einem Pferd.")
+        pcall(KCD2MP_ShowNativeToast, "You are already on a horse.")
         return false
     end
     local indoors = false
@@ -21493,7 +21515,7 @@ function KCD2MP_W212SpawnHorse()
         pcall(function() indoors = KCD2MP_W195Env(player:GetWorldPos()).indoor == true end)
     end
     if indoors then
-        pcall(KCD2MP_ShowNativeToast, "Geh zuerst nach draussen, dann kommt dein Pferd.")
+        pcall(KCD2MP_ShowNativeToast, "Go outside first, then your horse can come.")
         mp_log("WO212-HORSE refused: the player is indoors")
         return false
     end
@@ -21505,7 +21527,7 @@ function KCD2MP_W212SpawnHorse()
     if e then
         w212HorseReady(e, x, y, z)
         mp_log("WO212-HORSE the same horse comes back")
-        pcall(KCD2MP_ShowNativeToast, "Dein Pferd steht neben dir.")
+        pcall(KCD2MP_ShowNativeToast, "Your horse is beside you.")
         return true
     end
     local ok, err = pcall(function()
@@ -21513,7 +21535,7 @@ function KCD2MP_W212SpawnHorse()
     end)
     if not ok then
         mp_log("WO212-HORSE spawn failed: " .. tostring(err))
-        pcall(KCD2MP_ShowNativeToast, "Das Pferd konnte nicht erscheinen.")
+        pcall(KCD2MP_ShowNativeToast, "The horse could not appear.")
         return false
     end
     Script.SetTimer(700, function()
@@ -21522,7 +21544,91 @@ function KCD2MP_W212SpawnHorse()
         if h then w212HorseReady(h, x, y, z) end
         mp_log("WO212-HORSE spawned=" .. tostring(h ~= nil))
     end)
-    pcall(KCD2MP_ShowNativeToast, "Dein Pferd steht neben dir.")
+    pcall(KCD2MP_ShowNativeToast, "Your horse is beside you.")
+    return true
+end
+
+-- ===== WO-214: a player's called horse is shown to the partner =============================================================
+-- KCD2MP_W212SpawnHorse makes a horse in this player's world only. Its owner now says where it stands (on a move, on a change, every 8 s), and
+-- each partner shows a plain copy there that nobody can mount. While the owner rides it the copy is hidden: the rider's stand-in is the horse then.
+--   WO214-HORSE copy of=<id> spawned|removed|failed
+KCD2MP.w214 = KCD2MP.w214 or { copies = {}, sentAt = -100 }
+KCD2MP.W214_KEEP_S, KCD2MP.W214_NEAR_M = 120.0, 150.0
+
+function KCD2MP_W214OwnHorseTick(now)
+    local w = KCD2MP.w214
+    for id, c in pairs(w.copies) do
+        if now - c.at > KCD2MP.W214_KEEP_S then KCD2MP_W214RemoveCopy(id) end
+    end
+    local e = nil
+    pcall(function() e = System.GetEntityByName(KCD2MP.W212_HORSE) end)
+    if not e then
+        if w.sent then
+            w.sent = nil
+            KCD2MP_EmitEvent("w214_horse", "0.00 0.00 0.00 0.000 gone")
+        end
+        return
+    end
+    local p, a = nil, nil
+    pcall(function() p = e:GetWorldPos(); a = e:GetWorldAngles() end)
+    if not p then return end
+    local st = KCD2MP._mountedHorseName == KCD2MP.W212_HORSE and "ridden" or "here"
+    local s = w.sent
+    local changed = not s or s.st ~= st or (st == "here" and (p.x - s.x) ^ 2 + (p.y - s.y) ^ 2 > 0.16)
+    if not changed and now - w.sentAt < 8.0 then return end
+    w.sent, w.sentAt = { x = p.x, y = p.y, st = st }, now
+    KCD2MP_EmitEvent("w214_horse", string.format("%.2f %.2f %.2f %.3f %s", p.x, p.y, p.z, a and a.z or 0, st))
+end
+
+function KCD2MP_W214RemoveCopy(id)
+    id = tostring(id)
+    local w = KCD2MP.w214
+    if not w.copies[id] then return false end
+    w.copies[id] = nil
+    local e = nil
+    pcall(function() e = System.GetEntityByName("kcd2mp_phorse_" .. id) end)
+    if e then pcall(function() System.RemoveEntity(e.id) end) end
+    mp_log("WO214-HORSE copy of=" .. id .. " removed")
+    return true
+end
+
+function KCD2MP_W214PeerHorse(id, x, y, z, r, state)
+    id = tostring(id)
+    if state == "gone" then return KCD2MP_W214RemoveCopy(id) end
+    if not player then return false end
+    local far = true
+    pcall(function()
+        local q = player:GetWorldPos()
+        far = (q.x - x) ^ 2 + (q.y - y) ^ 2 > KCD2MP.W214_NEAR_M ^ 2
+    end)
+    if far then return KCD2MP_W214RemoveCopy(id) end
+    local name = "kcd2mp_phorse_" .. id
+    local e = nil
+    pcall(function() e = System.GetEntityByName(name) end)
+    if not e then
+        local ok, h = pcall(System.SpawnEntity, { class = "Horse", position = { x = x, y = y, z = z }, name = name, properties = { esFaction = "Civilians" } })
+        if not (ok and h) then
+            mp_log("WO214-HORSE copy of=" .. id .. " failed")
+            return false
+        end
+        e = h
+        mp_set_no_save(e)
+        pcall(function() e:SetMountableByPlayer(false) end)
+        pcall(function() AI.ChangeParameter(e.id, AIPARAM_FACTION, "Civilians") end)
+        pcall(function() e:ChangeAttachmentMaterial("body", KCD2MP.W212_HORSE_COAT) end)
+        mp_log("WO214-HORSE copy of=" .. id .. " spawned")
+    end
+    local c = KCD2MP.w214.copies[id] or {}
+    KCD2MP.w214.copies[id] = c
+    c.at, c.entity = os.clock(), e
+    if state == "ridden" then
+        pcall(function() e:Hide(1) end)
+        return true
+    end
+    pcall(function() e:Hide(0) end)
+    pcall(function() e:Activate(1) end)
+    pcall(function() e:SetWorldPos({ x = x, y = y, z = z }) end)
+    pcall(function() e:SetWorldAngles({ x = 0, y = 0, z = r }) end)
     return true
 end
 
@@ -21806,7 +21912,7 @@ function KCD2MP_W213HideCopy(id)
     local w = KCD2MP.w213
     if w.copies[id] then return false end
     local name = KCD2MP.ghostHorseName and KCD2MP.ghostHorseName[id]
-    if not name or name == "" or name == "-" or name == KCD2MP._mountedHorseName then return false end
+    if not name or name == "" or name == "-" or name == KCD2MP._mountedHorseName or name == KCD2MP.W212_HORSE then return false end
     local g = KCD2MP.ghosts and KCD2MP.ghosts[id]
     local e = nil
     pcall(function() e = System.GetEntityByName(name) end)
@@ -28326,8 +28432,8 @@ do
     -- kind: onoff | crime (joint/individual) | voice | menukey | action | info. host = the host's lever.
     -- fn = the function the console command's template names (the menu calls exactly that).
     M.ITEMS = {
-        { id = "character", group = "Charakter", label = "Charakter wechseln", kind = "action", cmd = "mp_character", fn = "KCD2MP_LookOpen",
-          help = "Waehle aus allen NPCs, wie dich dein Partner sieht. Vor dir steht eine Vorschau." },        { id = "name_badges", group = "Display", label = "Partner's name badge", kind = "onoff", save = "NameBadges",
+        { id = "character", group = "Character", label = "Change character", kind = "action", cmd = "mp_character", fn = "KCD2MP_LookOpen",
+          help = "Choose from all NPCs how your partner sees you. A preview stands in front of you." },        { id = "name_badges", group = "Display", label = "Partner's name badge", kind = "onoff", save = "NameBadges",
           cmd = "mp_name_badges", fn = "KCD2MP_W154SetNameBadges", get = function() return M.nameBadges end,
           help = "Shows your partner's name (and health) above their figure." },
         { id = "ping_line", group = "Display", label = "Ping and clock line", kind = "onoff", save = "PingLine",
@@ -28352,13 +28458,13 @@ do
           get = function() return KCD2MP.w151 ~= nil and KCD2MP.w151.crimeJoint end,
           session = function() if M.hostCrime == nil then return nil end return M.hostCrime == "joint" end,
           help = "Shared: a crime by either of you counts for both. Individual: each answers for his own." },
-        { id = "crime_clear", group = "Gameplay", label = "Gesucht-Status und Delikte entfernen", kind = "action", cmd = "mp_crime_clear", fn = "KCD2MP_W212ClearCrimes",
-          help = "Die Leute in der Umgebung vergessen deine Taten, und dein Eintrag beim Host wird geloescht." },
-        { id = "crimes_off", group = "Gameplay", label = "Delikte ausschalten", kind = "onoff", save = "CrimesOff",
+        { id = "crime_clear", group = "Gameplay", label = "Clear wanted status and crimes", kind = "action", cmd = "mp_crime_clear", fn = "KCD2MP_W212ClearCrimes",
+          help = "People nearby forget what you did, and your record at the host is deleted." },
+        { id = "crimes_off", group = "Gameplay", label = "Crimes off", kind = "onoff", save = "CrimesOff",
           cmd = "mp_crimes_off", fn = "KCD2MP_W212SetCrimesOff", get = function() return KCD2MP.w212 ~= nil and KCD2MP.w212.crimesOff end,
-          help = "An: deine neuen Taten zaehlen nicht, Zeugen vergessen sie sofort wieder. Gilt nur fuer dich." },
-        { id = "horse_here", group = "Gameplay", label = "Pferd neben mir", kind = "action", cmd = "mp_horse_here", fn = "KCD2MP_W212SpawnHorse",
-          help = "Stellt ein helles Pferd neben dich, das du legal reiten darfst. Nochmal druecken holt es zurueck. Nach dem Neuladen ist es weg." },
+          help = "On: your new crimes do not count and witnesses forget them at once. Applies to you only." },
+        { id = "horse_here", group = "Gameplay", label = "Horse beside me", kind = "action", cmd = "mp_horse_here", fn = "KCD2MP_W212SpawnHorse",
+          help = "Puts a light horse beside you that you may ride. Your partner sees it too. Press again to bring it back. It is gone after a reload." },
         { id = "fast_travel", group = "Gameplay", label = "Fast travel", kind = "onoff", host = true, save = "FastTravel",
           cmd = "mp_fast_travel", fn = "KCD2MP_W154SetFastTravel",
           get = function() return M.fastTravel end, session = function() return M.hostFt end,
@@ -28830,7 +28936,7 @@ do
     end
 end
 
--- ===== Modified build: the character window (Insert -> Charakter wechseln) =====
+-- ===== Modified build: the character window (Insert -> Change character) =====
 -- The agent owns the list (every adult NPC of this game) and sends it a page at a time. PgUp/PgDn choose, End confirms, the menu key
 -- closes. While a character is highlighted, a local preview body stands in front of the player: he never sees his own figure otherwise.
 -- The preview is never saved, never streamed and goes when the window closes.
@@ -28870,7 +28976,7 @@ do
         local e = nil
         pcall(function() e = System.GetEntityByName(name) end)
         if not e then
-            L.note = "Vorschau nicht moeglich."
+            L.note = "No preview possible."
             return false
         end
         L.previewEnt, L.previewGuid, L.previewName = e, row.guid, name
@@ -28889,14 +28995,14 @@ do
         local mounted, fight = KCD2MP.isRiding == true, false
         pcall(function() mounted = mounted or player.human:IsMounted() == true end)
         pcall(function() fight = player.soul:IsInCombatDanger() == true end)
-        if mounted then return "Steig zuerst vom Pferd ab." end
-        if fight then return "Im Kampf geht das nicht." end
+        if mounted then return "Get off your horse first." end
+        if fight then return "Not possible during a fight." end
         return nil
     end
 
     function KCD2MP_LookOpen()
         if not M.fresh() then
-            M.setNote("Der Helfer laeuft nicht: starte das Spiel ueber den Launcher.")
+            M.setNote("The helper is not running: start the game from the launcher.")
             return false
         end
         L.open, L.rows, L.sel, L.note = true, {}, 1, nil
@@ -28915,7 +29021,7 @@ do
         if r.t == "n" or r.t == "b" then request(r.k); return end
         local why = busyWhy()
         if why then L.note = why; return end
-        L.note = "Wird uebernommen..."
+        L.note = "Applying..."
         KCD2MP_EmitEvent("fig_pick", r.t == "r" and "none" or r.k)
     end
 
@@ -28954,8 +29060,8 @@ do
 
     function KCD2MP_FigureCurrent(soul, label, saved)
         L.cur = tostring(soul or "")
-        L.note = (L.cur == "" and "Zurueck auf der Standardfigur." or ("Dein Partner sieht dich jetzt als " .. tostring(label) .. "."))
-            .. (saved == false and " (Konnte nicht gespeichert werden.)" or "")
+        L.note = (L.cur == "" and "Back to the default figure." or ("Your partner now sees you as " .. tostring(label) .. "."))
+            .. (saved == false and " (Could not be saved.)" or "")
         mp_log("FIGURE chosen " .. (L.cur == "" and "standard" or L.cur))
         return true
     end
@@ -28972,7 +29078,7 @@ do
         local now, S = os.clock(), M.LAYOUT
         if L.waiting and (now - (L.askAt or now)) > ANSWER_TIMEOUT_S then
             L.waiting, L.incoming = false, nil
-            L.note = "Keine Antwort vom Helfer. Schliess das Fenster und versuch es nochmal."
+            L.note = "No answer from the helper. Close the window and try again."
         end
         local sel = L.rows[L.sel]
         if sel and sel.t == "s" then
@@ -28983,18 +29089,18 @@ do
         elseif L.previewEnt then
             removePreview()
         end
-        System.DrawText(x, y, "Charakter wechseln (" .. key .. " schliesst)", S.title)
+        System.DrawText(x, y, "Change character (" .. key .. " closes)", S.title)
         y = y + S.line + 6
-        System.DrawText(x, y, L.waiting and "Lade..." or tostring(L.title), S.small)
+        System.DrawText(x, y, L.waiting and "Loading..." or tostring(L.title), S.small)
         y = y + ROWS_LINE + 2
         for i, r in ipairs(L.rows) do
-            local mark = ((r.t == "s" and r.k == L.cur) or (r.t == "r" and L.cur == "")) and "  [aktiv]" or ""
+            local mark = ((r.t == "s" and r.k == L.cur) or (r.t == "r" and L.cur == "")) and "  [active]" or ""
             System.DrawText(x, y, (i == L.sel and "> " or "  ") .. tostring(r.label) .. mark, S.row)
             y = y + S.line
         end
         y = y + 6
         if sel and sel.t == "s" and string.find(tostring(sel.label), "(!)", 1, true) then
-            for _, ln in ipairs(M.wrap("(!) Story-Figur, Wache oder Feind: das Original kann in der Welt doppelt stehen.", S.wrap)) do
+            for _, ln in ipairs(M.wrap("(!) Story figure, guard or enemy: the original can stand in the world as well.", S.wrap)) do
                 System.DrawText(x, y, ln, S.small)
                 y = y + S.line - 2
             end
@@ -29006,7 +29112,7 @@ do
             end
         end
         y = y + 4
-        System.DrawText(x, y, "PgUp/PgDn waehlen  End bestaetigen  " .. key .. " schliessen", S.small)
+        System.DrawText(x, y, "PgUp/PgDn select  End confirm  " .. key .. " close", S.small)
         return true
     end
 end

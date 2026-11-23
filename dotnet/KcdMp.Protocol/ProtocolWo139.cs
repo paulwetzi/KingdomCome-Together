@@ -67,7 +67,8 @@ public static partial class Protocol
     public const int CrimeTextMax = 1400;
 
     // ---- ask kinds (APPEND-ONLY) ----
-    public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3, CrimeAskEndFights = 4, CrimeAskClear = 5;   // WO-212: "clear" | "off" | "on"
+    public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3, CrimeAskEndFights = 4, CrimeAskClear = 5,   // WO-212: "clear" | "off" | "on"
+                      CrimeAskHorse = 6;   // WO-214: "<x> <y> <z> <rot> here|ridden|gone", this player's called horse
     /// <summary>WO-212: the native op that releases the input filter "no_inventory".</summary>
     public const byte Wo212OpInputFilter = 150;
     /// <summary>WO-212: the keep-alive of the DLL's own position push.</summary>
@@ -76,17 +77,18 @@ public static partial class Protocol
     public const byte Wo212OpShopKeeper = 152;
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
-                      CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8;
+                      CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8,
+                      CrimeHostPeerHorse = 9;   // WO-214: tok = the owner's ghost id, text as CrimeAskHorse
 
     public static string CrimeAskName(byte k) => k switch
     {
-        CrimeAskReport => "report", CrimeAskOutcome => "outcome", CrimeAskResync => "resync", CrimeAskEndFights => "end-fights", CrimeAskClear => "clear", _ => $"unknown-{k}",
+        CrimeAskReport => "report", CrimeAskOutcome => "outcome", CrimeAskResync => "resync", CrimeAskEndFights => "end-fights", CrimeAskClear => "clear", CrimeAskHorse => "horse", _ => $"unknown-{k}",
     };
 
     public static string CrimeHostName(byte k) => k switch
     {
         CrimeHostJudged => "judged", CrimeHostStop => "stop", CrimeHostPursue => "pursue", CrimeHostRecord => "record",
-        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", _ => $"unknown-{k}",
+        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", CrimeHostPeerHorse => "peer-horse", _ => $"unknown-{k}",
     };
 }
 

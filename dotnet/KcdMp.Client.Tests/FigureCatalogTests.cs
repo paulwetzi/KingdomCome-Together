@@ -111,8 +111,8 @@ public class FigureCatalogTests
         var c = FigureCatalog.Build(new[] { Row("kopa_woman_1"), Row("kvrc_woman_2"), Row("pogrom_woman_3"), Row("hladAZmar_woman_4") }, NoText);
         Assert.Equal("kland", c.ByName("kopa_woman_1")!.Place);
         Assert.Equal("kland", c.ByName("kvrc_woman_2")!.Place);
-        Assert.Equal("szenen", c.ByName("pogrom_woman_3")!.Place);
-        Assert.Equal("szenen", c.ByName("hladAZmar_woman_4")!.Place);
+        Assert.Equal("scenes", c.ByName("pogrom_woman_3")!.Place);
+        Assert.Equal("scenes", c.ByName("hladAZmar_woman_4")!.Place);
     }
 
     [Fact]

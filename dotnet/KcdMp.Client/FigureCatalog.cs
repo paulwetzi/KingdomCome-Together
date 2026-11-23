@@ -31,19 +31,19 @@ public sealed class FigureCatalog
     public sealed record Row(char Type, string Key, string Label, string Guid, string Class);
     public sealed record Page(string Node, string Title, IReadOnlyList<Row> Rows);
 
-    private static readonly string[] GroupNames = { "Frauen", "Maenner", "Story-Figuren", "Wachen und Soldaten", "Banditen und Feinde" };
+    private static readonly string[] GroupNames = { "Women", "Men", "Story figures", "Guards and soldiers", "Bandits and enemies" };
     private static readonly IReadOnlyDictionary<string, string> Places = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["tsem"] = "Semine", ["tsla"] = "Slatejov", ["ttac"] = "Tachov", ["ttkc"] = "Troskowitz", ["ttro"] = "Trosky",
-        ["tvez"] = "Roma-Lager", ["tvid"] = "Vidlak", ["tzel"] = "Zelejov", ["tneb"] = "Nebakov", ["tpod"] = "Podsemin",
-        ["tkop"] = "Kopanina", ["tbuk"] = "Bukov", ["tzda"] = "Zdar", ["tland"] = "Umland Trosky",
-        ["kkut"] = "Kuttenberg", ["ksuc"] = "Suchdol", ["kzik"] = "Sigismunds Lager", ["kgru"] = "Grunta", ["kmis"] = "Miskovice",
+        ["tvez"] = "Roma camp", ["tvid"] = "Vidlak", ["tzel"] = "Zelejov", ["tneb"] = "Nebakov", ["tpod"] = "Podsemin",
+        ["tkop"] = "Kopanina", ["tbuk"] = "Bukov", ["tzda"] = "Zdar", ["tland"] = "Trosky countryside",
+        ["kkut"] = "Kuttenberg", ["ksuc"] = "Suchdol", ["kzik"] = "Sigismund's camp", ["kgru"] = "Grunta", ["kmis"] = "Miskovice",
         ["kpri"] = "Pritoky", ["ksta"] = "Stara Kutna", ["kmal"] = "Malesov", ["kbyl"] = "Bylany", ["khor"] = "Horany",
         ["klor"] = "Lorec", ["krat"] = "Ratboricko", ["kcer"] = "Certovka", ["kboh"] = "Bohounovice", ["kvys"] = "Vysoka",
-        ["kmez"] = "Mezholezy", ["kpec"] = "Pecky", ["ksed"] = "Sedlec", ["krab"] = "Rabstejnka", ["ssed"] = "Kloster Sedlec",
-        ["kland"] = "Umland Kuttenberg", [SceneKey] = "Szenen und Ereignisse",
+        ["kmez"] = "Mezholezy", ["kpec"] = "Pecky", ["ksed"] = "Sedlec", ["krab"] = "Rabstejnka", ["ssed"] = "Sedlec Monastery",
+        ["kland"] = "Kuttenberg countryside", [SceneKey] = "Scenes and events",
     };
-    private const string SceneKey = "szenen";
+    private const string SceneKey = "scenes";
     /// <summary>Small map areas with a few camps each: one entry per region keeps the place list short.</summary>
     private static readonly IReadOnlyDictionary<string, string> MergedPlaces = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -178,10 +178,10 @@ public sealed class FigureCatalog
         int offset = m.Groups[3].Success ? int.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture) : 0;
         if (!m.Groups[1].Success)
         {
-            var root = new List<Row> { new('r', "none", "Standardfigur", "", "") };
+            var root = new List<Row> { new('r', "none", "Default figure", "", "") };
             for (int g = 0; g < GroupNames.Length; g++)
                 root.Add(new Row('n', $"g{g}", $"{GroupNames[g]} ({CountIn((FigureGroup)g)})", "", ""));
-            return new Page("root", "Charakter waehlen", root);
+            return new Page("root", "Choose character", root);
         }
         int gi = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
         var inGroup = _all.Where(f => (int)f.Group == gi).ToList();
@@ -201,11 +201,11 @@ public sealed class FigureCatalog
     {
         offset = Math.Clamp(offset, 0, Math.Max(0, (all.Count - 1) / PageSize * PageSize));
         offset -= offset % PageSize;
-        var rows = new List<Row> { new('b', parent, "< Zurueck", "", "") };
-        if (offset > 0) rows.Add(new Row('n', $"{node}@{offset - PageSize}", "^ vorige Seite", "", ""));
+        var rows = new List<Row> { new('b', parent, "< Back", "", "") };
+        if (offset > 0) rows.Add(new Row('n', $"{node}@{offset - PageSize}", "^ previous page", "", ""));
         rows.AddRange(all.Skip(offset).Take(PageSize));
-        if (offset + PageSize < all.Count) rows.Add(new Row('n', $"{node}@{offset + PageSize}", "v naechste Seite", "", ""));
-        string range = all.Count > PageSize ? $"  {offset + 1}-{Math.Min(offset + PageSize, all.Count)} von {all.Count}" : "";
+        if (offset + PageSize < all.Count) rows.Add(new Row('n', $"{node}@{offset + PageSize}", "v next page", "", ""));
+        string range = all.Count > PageSize ? $"  {offset + 1}-{Math.Min(offset + PageSize, all.Count)} of {all.Count}" : "";
         return new Page(offset == 0 ? node : $"{node}@{offset}", title + range, rows);
     }
 

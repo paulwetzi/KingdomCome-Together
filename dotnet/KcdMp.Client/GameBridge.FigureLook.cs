@@ -58,7 +58,7 @@ public partial class GameBridge
         try
         {
             var cat = await FigureCatalogAsync();
-            if (cat is null || cat.Count == 0) { await FigureErrorAsync("Die NPC-Liste konnte nicht gelesen werden."); return; }
+            if (cat is null || cat.Count == 0) { await FigureErrorAsync("The NPC list could not be read."); return; }
             var page = cat.PageFor(node) ?? cat.PageFor("root")!;
             await ExecLuaAsync($"if KCD2MP_FigurePageBegin then KCD2MP_FigurePageBegin(\"{EscapeLua(node)}\",\"{EscapeLua(page.Title)}\",\"{EscapeLua(_myFigure?.Soul ?? "")}\",{page.Rows.Count}) end");
             foreach (var r in page.Rows)
@@ -76,13 +76,13 @@ public partial class GameBridge
             if (soul != "none")
             {
                 f = cat?.ByName(soul);
-                if (f is null) { await FigureErrorAsync("Diese Figur gibt es in deinem Spiel nicht."); return; }
+                if (f is null) { await FigureErrorAsync("This figure does not exist in your game."); return; }
             }
             _myFigure = f;
             var saved = SettingsJson.Update(W154mModSettings, new[] { SettingsJson.Edit.Set(FigureLookSetting, JsonValue.Create(f?.Soul ?? "")) }, createIfMissing: true);
             Console.WriteLine($"MP-FIGURE chosen: {f?.Soul ?? "standard"} (saved: {saved.Outcome.ToString().ToLowerInvariant()})");
             await FigureSendAsync("changed");
-            await ExecLuaAsync($"if KCD2MP_FigureCurrent then KCD2MP_FigureCurrent(\"{EscapeLua(f?.Soul ?? "")}\",\"{EscapeLua(f?.Label ?? "Standardfigur")}\",{(saved.Ok ? "true" : "false")}) end");
+            await ExecLuaAsync($"if KCD2MP_FigureCurrent then KCD2MP_FigureCurrent(\"{EscapeLua(f?.Soul ?? "")}\",\"{EscapeLua(f?.Label ?? "Default figure")}\",{(saved.Ok ? "true" : "false")}) end");
         }
         catch (Exception ex) { Console.WriteLine($"MP-FIGURE pick failed: {ex.GetType().Name}"); }
     }

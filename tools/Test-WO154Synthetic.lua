@@ -194,9 +194,9 @@ do
     check("b: the frame draws the title", title ~= nil)
     check("b: ...the key hint", drawn("PgUp/PgDn choose  End change  Insert close") ~= nil)
     check("b: ...a group header", drawn("-- Display --") ~= nil and drawn("-- Gameplay --") ~= nil and drawn("-- Help --") ~= nil)
-    check("b: ...the chosen row with its marker and value", drawn("> Charakter wechseln") ~= nil and drawn("  Partner's name badge: On") ~= nil)   -- modified build: the character window is the first item
+    check("b: ...the chosen row with its marker and value", drawn("> Change character") ~= nil and drawn("  Partner's name badge: On") ~= nil)   -- modified build: the character window is the first item
     check("b: ...the other rows unmarked", drawn("  Ping and clock line: On") ~= nil and drawn("  Fast travel: On") ~= nil)   -- WO-167 FT1: on by default
-    check("b: ...the chosen item's explanation", drawn("Waehle aus allen NPCs") ~= nil)
+    check("b: ...the chosen item's explanation", drawn("Choose from all NPCs") ~= nil)
     local minX = 1e9
     for _, d in ipairs(DRAWS) do if d.x < minX then minX = d.x end end
     check("b: everything on the right of the screen, never its centre (x >= 0.6 of 1920)", minX >= 1152, minX)
@@ -434,7 +434,7 @@ do
     check("f: crime shows the host's (individual), locked", row("crime_mode") == "  Crime: Individual  [set by the host]", row("crime_mode"))
     check("f: fast travel shows the host's, locked", row("fast_travel") == "  Fast travel: Off  [set by the host]", row("fast_travel"))
     check("f: the leash shows the host's, locked", row("leash") == "  Keep players together: On  [set by the host]", row("leash"))
-    check("f: this player's own items are not locked", row("character") == "> Charakter wechseln" and row("name_badges") == "  Partner's name badge: On" and row("sleep_vote") == "  Sleep and wait together: On", row("name_badges"))
+    check("f: this player's own items are not locked", row("character") == "> Change character" and row("name_badges") == "  Partner's name badge: On" and row("sleep_vote") == "  Sleep and wait together: On", row("name_badges"))
     local realFF, ffCalls = _G.KCD2MP_Wo121SetFriendlyFire, 0
     _G.KCD2MP_Wo121SetFriendlyFire = function(a) ffCalls = ffCalls + 1; return realFF(a) end
     local mark = #LOG
@@ -482,7 +482,7 @@ do
     NOW = NOW + 1
     key("kcd2mp_menu_toggle"); DRAWS = {}; frame()
     local t, c = drawn("Kingdom Come: Together"), drawn("Clean screen is ON: the mod shows nothing else.")
-    check("g: the menu still opens, and its first row says the clean screen is on", t ~= nil and c ~= nil and c.y > t.y and drawn("> Charakter wechseln") ~= nil and c.y < drawn("> Charakter wechseln").y)
+    check("g: the menu still opens, and its first row says the clean screen is on", t ~= nil and c ~= nil and c.y > t.y and drawn("> Change character") ~= nil and c.y < drawn("> Change character").y)
     check("g: mp_clean_screen off", KCD2MP_W154SetCleanScreen("off") == true)
     KCD2MP_ShowInteractionMsg("a mod line")
     labelFrame()
