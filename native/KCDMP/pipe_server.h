@@ -341,10 +341,7 @@ constexpr uint8_t kMenuOut            = 0xAD;
 // WO-208 B: the unsolicited 0xAE Defence [attackerEid:4][outcome:1][st:4f][hp:4f] -- an engaged copy's blow on the local player judged by
 // this machine's own engine (wo208_rules.h kDef*: 1 hit, 2 blocked, 3 perfect block, 4 guard broken, 5 missed) and the damage it applied.
 constexpr uint8_t kDefenceOut         = 0xAE;
-// WO-212: the unsolicited 0xAF own state [captureMs:4][the 0x86 body] -- sent from the game thread at an even pace, so the partner's
-// view of this player no longer waits for a request at a pipe that answers one request per frame.
-constexpr uint8_t kLocalStatePush     = 0xAF;
-constexpr uint8_t kSaveListReply     = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
+constexpr uint8_t kSaveListReply      = 0x8D;   // [ok][seq][listed][idx:2][count:2][current][contPl][contIdx:2][nameLen][contName]
 constexpr uint8_t kLocalAction        = 0x96;   // unsolicited: [kind][phase][ic][zone][type][flags][guid:16][eid:4][nameLen][name]
 constexpr uint8_t kPvpHitOut          = 0x97;   // unsolicited: [victimEid:4][st:4f][hp:4f][flags][material]
 
@@ -376,8 +373,5 @@ void stop();
 
 /// Whether an agent is currently connected.
 bool connected();
-
-/// WO-212, main thread: reads this frame's own state and sends it (0xAF). Never waits for another writer: a busy pipe skips this sample.
-void push_local_state();
 
 } // namespace kcdmp::pipe

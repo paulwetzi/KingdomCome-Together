@@ -93,7 +93,8 @@ public partial class GameBridge
         string hostWhy = sw is not null ? "-" : !named ? "no-attacker" : missile ? "missile" : pair.Why;
         // WO-208 B (mp_defence_local): the joiner's own engine judges this copy's blow -- the host waits for its outcome and sends no
         // verdict when it comes; none in time: the host's verdict, as before
-        if (named && !missile && W208("defence_local"))
+        bool grab = named && !missile && sw is { } gs && Wo223GrabBlow(ghost, attacker, gs.Row, verdict);   // WO-223 C: no wait for a grab's blow
+        if (named && !missile && W208("defence_local") && !grab)
         {
             var d = await Wo208AwaitOutcomeAsync(ghost, attacker);
             if (d.Judged)
@@ -265,6 +266,7 @@ public partial class GameBridge
         var c2 = hasDamage ? await Wo165VictimDecidesAsync(hitId, m, ct) : null;
         bool byEngine = c2 is { } e2 && e2.Call != Wo165Rules.DamageCall.FallbackApplyHost;
         bool applied = byEngine || (hasDamage && await ApplyPlayerHitAsync(m.Health, m.Stamina, ct));
+        if (applied && !byEngine && hasDamage && m.Attacker.Length > 0) Wo222NoteApplied(m.Attacker, hitId, m.Health, m.Stamina, m.Verdict);   // WO-222 C
         if (c2 is { } e3)
         {
             HitVerdict said = e3.Call == Wo165Rules.DamageCall.FallbackApplyHost ? m.Verdict : e3.Outcome;

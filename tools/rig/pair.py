@@ -48,7 +48,8 @@ def plan(cid):
         'dir': base,
         'agent_dir': os.path.join(base, 'agent'),
         'dll_dir': os.path.join(base, 'dll'),
-        'data_dir': os.path.join(base, 'data'),
+        # WO-214 F: KCDMP_RIG_JOIN_DATA=<tag> gives the joiner copy a Henry store of its own (a world never joined there: a first join)
+        'data_dir': os.path.join(base, 'data-' + JOIN_DATA if JOIN_DATA and cid == JOIN_CID else 'data'),
         'backup_dir': os.path.join(base, 'backups'),
         'bundle_dir': os.path.join(base, 'bundle'),
         'dice_port': 5900 + 10 * n + 1,      # the maintainer's launcher/agent keep 5901/5902
@@ -58,6 +59,15 @@ def plan(cid):
 
 
 def state(): return rig.load_state()
+
+
+def test_env():
+    """WO-213: KCDMP_RIG_TEST_ENV=K=V;K=V -- a twin's test switches (KCDMP_TEST_* only) for both agents, both games and the relay."""
+    out = {}
+    for kv in filter(None, os.environ.get('KCDMP_RIG_TEST_ENV', '').split(';')):
+        k, _, v = kv.partition('=')
+        if k.startswith('KCDMP_TEST_'): out[k] = v
+    return out
 
 
 def prepare():
@@ -110,6 +120,15 @@ HOST_CID = 'B' if os.environ.get('KCDMP_RIG_HOST') == 'B' else 'A'
 JOIN_CID = 'A' if HOST_CID == 'B' else 'B'
 SEED = {HOST_CID: [('playline4', 'save440.whs')], JOIN_CID: [('OLD/playline1', 'autosave026.whs')]}
 SEED_TO = {HOST_CID: 'playline4', JOIN_CID: 'playline3'}
+# WO-214 F: the joiner's usual Henry (that early save) carries nothing -- no weapon, no clothes -- so a draw test measures nothing.
+# KCDMP_RIG_JOIN_SAVE=<dir>/<file> (under the real saves, read only; another playthrough than the host's world) is seeded into the
+# joiner's playline2 and pinned as his first-join Henry (mp_join_henry playline2/<file>); with KCDMP_RIG_JOIN_DATA=<tag> (a Henry store
+# of the copy's own) the host's world is a first join there, so that Henry is the one brought.
+JOIN_SAVE = os.environ.get('KCDMP_RIG_JOIN_SAVE', '').strip().replace('\\', '/')
+JOIN_DATA = re.sub(r'[^A-Za-z0-9_-]', '', os.environ.get('KCDMP_RIG_JOIN_DATA', ''))
+if JOIN_SAVE:
+    SEED[JOIN_CID] = [tuple(JOIN_SAVE.rsplit('/', 1))]
+    SEED_TO[JOIN_CID] = 'playline2'
 
 
 def seed_saves():
@@ -157,7 +176,7 @@ def relay(plan_file=None):
     if procs.matches(st.get('relay')): rig.say('relay already up'); return 0
     exe = os.path.join(mirror.BUILD, 'relay', 'KcdMpServer.exe')
     argv = [exe, '--port', str(RELAY_PORT), '--urls', 'http://127.0.0.1:%d' % RELAY_HTTP]
-    env = rig.clean_env()
+    env = rig.clean_env(test_env())
     if plan_file:
         env['KCDMP_TEST_RELAY_FAULTS'] = '1'
         argv += ['--test-faults', os.path.abspath(plan_file)]
@@ -211,6 +230,7 @@ def up(cid):
     for kv in filter(None, os.environ.get('KCDMP_RIG_GAME_ENV', '').split(';')):   # WO-207: a native twin's test switch, KCDMP_TEST_* only
         k, _, v = kv.partition('=')
         if k.startswith('KCDMP_TEST_'): genv[k] = v
+    genv.update(test_env())   # WO-213
     rec = procs.start(argv, p['root'], rig.clean_env(genv), cid)
     st[key] = rec; st[key + '_since'] = t0; rig.save_state(st)
     rig.note('start', copy=cid, **rec, argv=argv, instance=cid)
@@ -421,6 +441,26 @@ def join_from_menu(cid, p, st, key, port):
             rig.note('pre-join-lua', copy=c, lua=pre)
         rig.say('pre-join Lua on both copies:', pre)
         time.sleep(2)
+    if JOIN_SAVE:   # WO-214 F: the pinned Henry, the console's answer (the launcher's answer only knows bring / fresh)
+        # sent once the agent asks (the first try, 3 s after the agent's start, never reached it: the agent asked "Bring / Start fresh"
+        # and waited, the host idled beside a joiner that never asked for the world -- and died of out-of-memory), then confirmed
+        pin = 'playline2/' + JOIN_SAVE.rsplit('/', 1)[1]
+        alog = os.path.join(p['agent_dir'], 'agent.log')
+        def seen(rx):
+            try:
+                with open(alog, encoding='utf-8', errors='replace') as f: return re.search(rx, f.read()) is not None
+            except OSError: return False
+        t0 = time.time()
+        while time.time() - t0 < 120 and not seen(r'MP-HENRY joiner: first join to world \S+ -- asking the player'): time.sleep(1)
+        for i in range(4):
+            rig.console(port_of(cid), '#KCD2MP_SetJoinHenry("%s")' % pin)
+            t1 = time.time()
+            while time.time() - t1 < 10 and not seen(r"first-join answer '%s'" % re.escape(pin)): time.sleep(0.5)
+            if seen(r"first-join answer '%s'" % re.escape(pin)):
+                rig.note('join-choice', copy=cid, choice=pin, tries=i + 1)
+                rig.say('copy', cid, 'first-join answer taken: %s (pinned, try %d)' % (pin, i + 1))
+                return 0
+        rig.say('copy', cid, 'the agent did not take the pinned first-join answer %s' % pin); return 1
     url = 'http://localhost:%d/join-choice?c=bring' % p['version_port']
     t0 = time.time()
     while time.time() - t0 < 90:
@@ -452,6 +492,7 @@ def start_agent(cid, role, port, twin=False):
     for kv in filter(None, os.environ.get('KCDMP_RIG_AGENT_ENV', '').split(';')):   # a twin's test switch (K=V;...), KCDMP_TEST_* only
         k, _, v = kv.partition('=')
         if k.startswith('KCDMP_TEST_'): env[k] = v
+    env.update(test_env())   # WO-213
     env['DOTNET_ROOT'] = os.environ.get('DOTNET_ROOT', os.path.expandvars(r'%USERPROFILE%\.dotnet-sdk8'))
     rec = procs.start(argv, p['agent_dir'], env, 'agent-' + cid)
     st['agent_' + cid.lower()] = rec; rig.save_state(st)
@@ -473,7 +514,8 @@ def collect(tag):
         put(os.path.join(p['root'], 'kcdmp-native.mirror.log'), 'kcdmp-native.mirror.log')
         put(os.path.join(p['dll_dir'], 'kcdmp-native-%s.log' % cid), 'kcdmp-native.log')
         put(os.path.join(p['agent_dir'], 'agent.log'), 'agent.log')
-        for f in ('kcdmp-anim.jsonl', 'kcdmp-anim.1.jsonl', 'digest.jsonl', 'applied.jsonl'):   # WO-210: the probe's rotated piece too (E.1's overlap)
+        # WO-210: the probe's rotated piece too (E.1's overlap); WO-215 G: the whole session's file and its rotated piece
+        for f in ('kcdmp-anim.jsonl', 'kcdmp-anim.1.jsonl', 'kcdmp-anim-session.jsonl', 'kcdmp-anim-session.1.jsonl', 'digest.jsonl', 'applied.jsonl'):
             put(os.path.join(p['root'], f), f)
             put(os.path.join(p['agent_dir'], f), f)
         put(os.path.join(rig.run_dir(), 'relay.log'), 'relay.log')

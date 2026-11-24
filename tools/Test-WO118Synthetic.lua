@@ -304,7 +304,8 @@ do
     check("d: MP-NPCWRITE bound line", logCount("MP-NPCWRITE npc=c_npc native=bound") == 1)
     check("d: no Lua errors", #ERRS == 0, ERRS[1])
 
-    -- (e) heartbeat stale
+    -- (e) heartbeat stale -- WO-214 B: with one_bind on (the default) a heartbeat may be 10 s late; 3.5 s is its twin's rule (one_bind off)
+    W214 = W214 or {}; W214.on = W214.on or {}; W214.on.one_bind = false
     local wS = #e.writes
     NOW = NOW + 3.5   -- no alive() for 3.5 s
     tick("c_npc", 21.3, 20, 1)
@@ -320,6 +321,7 @@ do
     alive(); tick("c_npc", 21.4, 20, 1)
     check("e: heartbeat back -> bind re-sent", #evts("npc_native") == nb + 1 and (evts("npc_native")[nb + 1] or ""):find("c_npc on ", 1, true) ~= nil, evts("npc_native")[nb + 1])
     check("e: no Lua errors", #ERRS == 0, ERRS[1])
+    W214.on.one_bind = nil
 end
 
 -- ---------------------------------------------------------------- (f)
@@ -533,7 +535,7 @@ do
     alive(); gtick(90.3)
     local ev = evts("npc_native")
     check("n: healthy -> ghost bind event for kcd2mp_7 with the ghost delay",
-          #ev == 1 and ev[1]:find("^kcd2mp_7 on ") ~= nil and ev[1]:find(" 70$") ~= nil, ev[1])
+          #ev == 1 and ev[1]:find("^kcd2mp_7 on ") ~= nil and ev[1]:find(" 100$") ~= nil, ev[1])
     KCD2MP_NpcNativeAck("kcd2mp_7", 1, "ok")
     check("n: the ack lands on the ghost's istate", ist.nativeOwned == true)
     local w = #e.writes

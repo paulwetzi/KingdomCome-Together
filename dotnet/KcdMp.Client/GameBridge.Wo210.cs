@@ -95,6 +95,20 @@ public partial class GameBridge
         long now = Environment.TickCount64;
         foreach (var (kind, name) in Wo210Rules.ParseAsks(rr.Payload))
         {
+            if (kind == Protocol.Wo213AskPostureLate)   // WO-213 E.2: the host's state of this body is late past the hold: asked for again
+            {
+                long kl = Interlocked.Increment(ref _w213PostureAsks);
+                if (kl <= 200 || kl % 50 == 0) Console.WriteLine($"MP-NPCRESYNC dir=out posture-late npc={name}: no state from the host past its resend and a 2 s hold -- asked again [n={kl}]");
+                _ = Wo210AskAnimAsync([name], "posture-late");
+                continue;
+            }
+            if (kind == Protocol.Wo215AskDormant)   // WO-215 D.1: the host holds this body dormant -- no copy should stand here: parked
+            {
+                long kd = Interlocked.Increment(ref _w215DormantAsks);
+                if (kd <= 100 || kd % 50 == 0) Console.WriteLine($"MP-W215 dormant npc={name}: its host NPC's whole body is empty (dormant on the host) -> the mod parks the copy [n={kd}]");
+                _ = ExecLuaAsync($"if KCD2MP_W215Dormant then KCD2MP_W215Dormant(\"{EscapeLua(name)}\") end");
+                continue;
+            }
             if (kind != Protocol.Wo210AskRelease) continue;
             if (_w210ReleasedAt.TryGetValue(name, out long at) && now - at < 5000) continue;
             _w210ReleasedAt[name] = now;

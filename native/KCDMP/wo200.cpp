@@ -7,6 +7,7 @@
 #include "wo202.h"
 #include "wo202_rules.h"
 #include "wo200_rules.h"
+#include "wo221.h"
 
 #include <windows.h>
 #include <atomic>
@@ -26,6 +27,8 @@
 #include "pe_exports.h"
 #include "rttr_abi.h"
 #include "wo137.h"
+#include "wo163.h"
+#include "wo203.h"
 
 namespace kcdmp::wo200 {
 
@@ -675,6 +678,78 @@ void scene_note(const void* node, uint32_t cid, const HandlerRead& h, Verdict v)
     push_event(kEvClosureClass, cid, kind_name(Kind::SceneStarter), kRttiHandler);
 }
 
+// WO-221 D.1: the horse rule's pass-through (wo200_rules.h horse_pass). The node is not run; its OnExec is pulsed here, inside the
+// engine's own Execute of that node, on its thread, by a plain call of the port's own trigger -- what the node itself would do next;
+// no fault guard around it (the pulse runs the quest graph downstream).
+// the quest module instances that sell a joiner's recorded horse (the host's agent says which: op 199)
+std::mutex g_horseModMu;
+std::vector<std::string> g_horseMods;
+std::atomic<uint32_t> c_horseOwnBuy{0};
+bool horse_module_blocked(const char* path) {
+    std::lock_guard<std::mutex> l(g_horseModMu);
+    for (const auto& m : g_horseMods)
+        if (!m.empty() && std::strncmp(path, m.c_str(), m.size()) == 0 && path[m.size()] == '.') return true;
+    return false;
+}
+uint8_t op_horse_mods(uint8_t, const uint8_t* b, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+    *outLen = 0;
+    if (len < 2) return wo163::kRBadRequest;
+    std::vector<std::string> v;
+    size_t o = 2;
+    for (int i = 0; i < b[1]; ++i) {
+        if (o + 2 > len) return wo163::kRBadRequest;
+        const size_t n = b[o] | (static_cast<size_t>(b[o + 1]) << 8);
+        o += 2;
+        if (n == 0 || n > 400 || o + n > len) return wo163::kRBadRequest;
+        v.emplace_back(reinterpret_cast<const char*>(b + o), n);
+        o += n;
+    }
+    { std::lock_guard<std::mutex> l(g_horseModMu); g_horseMods.swap(v); }
+    if (cap >= 1) { out[0] = b[1]; *outLen = 1; }
+    return wo163::kROk;
+}
+const bool kHorseModReg = wo203::reg_op(199, &op_horse_mods);
+thread_local bool t_horsePass = false;
+thread_local char t_horseParent[128] = "";
+std::atomic<uint32_t> c_horseReplace{0}, c_horseKill{0}, c_horseNoPort{0};
+void horse_pass_through(void* node, uint32_t cid, HorsePass hp, const char* parent, uint8_t role, bool hostOwnBuy = false) {
+    char path[480] = "?";
+    ++t_inGate;
+    wo137::path_of(node, path, sizeof path);
+    --t_inGate;
+    (hp == HorsePass::Replace ? c_horseReplace : c_horseKill).fetch_add(1, std::memory_order_relaxed);
+    logf("WO221-HORSE %s: %s not run (%s) -- %s; its OnExec pulsed", role == kRoleHost ? "host" : "joiner", path,
+         hp == HorsePass::Replace ? "ReplacePlayerHorse" : "Kill",
+         hp == HorsePass::Replace ? (hostOwnBuy ? "the host bought a horse the record names a joiner's: it stays the joiner's, this game's own horse stays as it is"
+                                     : role == kRoleHost ? "a joiner's purchase or gift: this game's own player's horse stays as it is"
+                                                       : "the host's own purchase or gift, mirrored here: this player's horse stays as it is")
+                                  : "the old horse's disposal that follows it");
+    push_event(kEvHorsePass, cid, hp == HorsePass::Replace ? (hostOwnBuy ? "hostbuy" : "replace") : "kill", path);
+    void* port = wo137::find_port_ref(node, "OnExec");
+    const void* pvt = nullptr;
+    if (!port || !rd(port, 0, &pvt) || !is_trigger_port_vft(pvt)) {
+        if (port) wo137::release_ref(port);
+        c_horseNoPort.fetch_add(1, std::memory_order_relaxed);
+        logf("WO221-HORSE %s has no OnExec trigger port: the chain behind it stops here", path);
+        return;
+    }
+    const bool was = t_horsePass;
+    char prev[sizeof t_horseParent];
+    std::memcpy(prev, t_horseParent, sizeof prev);
+    if (hp == HorsePass::Replace) { t_horsePass = true; strncpy_s(t_horseParent, parent ? parent : "", _TRUNCATE); }
+    g_origOut(port);
+    if (hp == HorsePass::Replace) { t_horsePass = was; std::memcpy(t_horseParent, prev, sizeof prev); }
+    wo137::release_ref(port);
+}
+
+int horse_status(char* out, int n) {
+    size_t mods = 0;
+    { std::lock_guard<std::mutex> l(g_horseModMu); mods = g_horseMods.size(); }
+    return std::snprintf(out, static_cast<size_t>(n), "replace_passed=%u kill_passed=%u no_port=%u joiner_horse_modules=%zu host_bought_a_joiners=%u",
+                         c_horseReplace.load(), c_horseKill.load(), c_horseNoPort.load(), mods, c_horseOwnBuy.load());
+}
+const bool kHorseReg = wo221::add_status("horse_gate", &horse_status);
+
 bool gate(void* node, void* /*ctx*/) {
     if (!g_gateOn.load(std::memory_order_relaxed) || t_inGate) return false;
     c_gateCalls.fetch_add(1, std::memory_order_relaxed);
@@ -702,6 +777,28 @@ bool gate(void* node, void* /*ctx*/) {
         if (!wo137::function_method(node, mname, sizeof mname)) return false;
         m = method_kind(mname);
         if (m == Method::Other) return false;
+        if (m == Method::PlayerHorse || m == Method::KillSoul) {   // WO-221 D.1: gated by the horse rule only
+            if (m == Method::KillSoul && !t_horsePass) return false;
+            char pn[128] = "";
+            ++t_inGate;
+            const bool pok = parent_name(node, pn, sizeof pn);
+            --t_inGate;
+            HorsePass hp = horse_pass(role, k, m, inClosure, mirror, c.joined, t_horsePass, pok && std::strcmp(pn, t_horseParent) == 0,
+                                      wo221::on(wo221::kBitOwnHorse));
+            // the host's own purchase of a horse the record names a joiner's (the groom offers any horse in his yard that is not the
+            // buyer's own): passed through like a joiner's
+            bool hostOwnBuy = false;
+            if (hp == HorsePass::No && m == Method::PlayerHorse && role == kRoleHost && !inClosure && !mirror && wo221::on(wo221::kBitOwnHorse)) {
+                char tp[480] = "";
+                ++t_inGate;
+                wo137::path_of(node, tp, sizeof tp);
+                --t_inGate;
+                if (horse_module_blocked(tp)) { hp = HorsePass::Replace; hostOwnBuy = true; c_horseOwnBuy.fetch_add(1, std::memory_order_relaxed); }
+            }
+            if (hp == HorsePass::No) return false;
+            horse_pass_through(node, cid, hp, pok ? pn : "", role, hostOwnBuy);
+            return true;
+        }
     }
     Target t = Target::Unknown;
     if (needs_target(role, k, m, inClosure, mirror, c)) t = read_target(node);

@@ -22,6 +22,11 @@ public static class Briefing
         /// <summary>WO-206 D: the animation probe's file, analysed; null when the bundle has none (or it could not be read: <see cref="AnimError"/>).</summary>
         public AnimAnalysis? Anim;
         public string? AnimError;
+        /// <summary>WO-215 G: the session probe's file (the whole session, one body a line); null when the bundle has none.</summary>
+        public AnimStream? AnimSession;
+        /// <summary>WO-221 F: what the launch filter kept and left out (the native log, the detail probe, the session probe); null: not read.</summary>
+        public LaunchFilter.Result? NativeLaunch, AnimLaunch, SessionLaunch;
+        public string? NativeEntry;
     }
 
     public static Input Read(IReadOnlyList<SourceFile> sources)
@@ -47,7 +52,34 @@ public static class Briefing
             catch { }
         }
         ReadAnim(sources, inp);
+        ReadAnimSession(sources, inp);
         return inp;
+    }
+
+    /// <summary>WO-215 G: anim/kcdmp-anim-session.jsonl (and the one before it, .1): the whole session, one body a line. Never fatal.</summary>
+    private static void ReadAnimSession(IReadOnlyList<SourceFile> sources, Input inp)
+    {
+        try
+        {
+            var parts = sources.Where(s => s.EntryName == AnimStream.SessionPrevEntry).Concat(sources.Where(s => s.EntryName == AnimStream.SessionEntry)).ToList();
+            if (parts.Count == 0) return;
+            var st = new AnimStream();
+            var rows = new List<string>();
+            foreach (var p in parts)
+            {
+                byte[]? bytes = Packer.Read(p);
+                if (bytes is null) continue;
+                using var r = new StreamReader(new MemoryStream(bytes, false), Encoding.UTF8, false, 1 << 16);
+                string? l;
+                while ((l = r.ReadLine()) is not null) rows.Add(l);
+            }
+            // WO-221 F: the file before this one (.1) is whatever launch last filled it: only this launch's rows are the session
+            inp.SessionLaunch = LaunchFilter.ProbeNewest(rows);
+            foreach (var l in inp.SessionLaunch.Lines) st.AddLine(l);
+            st.Finish();
+            inp.AnimSession = st;
+        }
+        catch { inp.AnimSession = null; }
     }
 
     /// <summary>WO-206 D: the probe file (anim/kcdmp-anim.jsonl, its pieces, or kcdmp-anim.jsonl as a folder holds it), run
@@ -62,7 +94,18 @@ public static class Briefing
             byte[]? bytes = whole is not null ? Packer.Read(whole)
                           : AnimBundle.Join(pieces.Select(p => (p.EntryName, Packer.Read(p) ?? Array.Empty<byte>())), AnimStream.BundleEntry);
             if (bytes is null) { inp.AnimError = "the file could not be opened"; return; }
-            inp.Anim = AnimDetect.Analyse(AnimStream.Parse(bytes));
+            // WO-221 F: this launch's rows only
+            var rows = new List<string>();
+            using (var r = new StreamReader(new MemoryStream(bytes, false), Encoding.UTF8, false, 1 << 16))
+            {
+                string? l;
+                while ((l = r.ReadLine()) is not null) rows.Add(l);
+            }
+            inp.AnimLaunch = LaunchFilter.ProbeNewest(rows);
+            var st = new AnimStream();
+            foreach (var l in inp.AnimLaunch.Lines) st.AddLine(l);
+            st.Finish();
+            inp.Anim = AnimDetect.Analyse(st);
         }
         catch (Exception ex) { inp.AnimError = ex.GetType().Name + ": " + ex.Message; }
     }
@@ -81,6 +124,29 @@ public static class Briefing
         sb.Append("Written by the bug report itself (WO-202). Times are this machine's clock.\n\n");
         var (bv, bid) = BuildOf(inp);   // WO-211 0.2: the build id in the first lines (the installer's name carries the same)
         sb.Append($"**Build:** {bv} build {bid}\n\n");
+        try { sb.Append(LaunchLine(inp)); } catch { }   // WO-221 F
+        // WO-218 F.4: this machine's queue first -- every number below is late by it
+        try { sb.Append(W218Section.Section(AgentLines(inp).ToList())); }
+        catch (Exception ex) { sb.Append($"{W218Section.Heading}\n\n(not read: {ex.GetType().Name}: {ex.Message})\n\n"); }
+        // WO-213 G: the link to the partner is the first thing read in every two-player bundle
+        try
+        {
+            sb.Append(LinkSection.Section(AgentLines(inp).ToList(),
+                inp.Logs.Where(kv => kv.Key.StartsWith("relay", StringComparison.OrdinalIgnoreCase)).OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => kv.Value).ToList()));
+        }
+        catch (Exception ex) { sb.Append($"## Link\n\n(not read: {ex.GetType().Name}: {ex.Message})\n\n"); }   // never the briefing's end
+        // WO-215 G: the copies' bodies, one line per contract, in plain words (the end of the Link section)
+        try { sb.Append(W215Section.Lines(inp.AnimSession, NativeLines(inp).ToList(), AgentLines(inp).ToList(), Kcd(inp).ToList(), inp.Logs.ContainsKey(SessionRule.NoteEntry))).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the copies' bodies** (WO-215): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
+        // WO-216 I: the rest of the body, one line per contract, in plain words
+        try { sb.Append(W216Section.Lines(NativeLines(inp).ToList(), AgentLines(inp).ToList())).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the rest of the body** (WO-216): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
+        // WO-217 H: the world around the bodies (placements by reason, the seats, the loot ledger, flags, corpses, props, carts)
+        try { sb.Append(W217Section.Lines(NativeLines(inp).ToList(), Kcd(inp).ToList())).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the world around the bodies** (WO-217): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
+        // WO-218 F.4: the pipe's batch and the queue's pressure
+        try { sb.Append(W218Section.Lines(NativeLines(inp).ToList(), AgentLines(inp).ToList())).Append('\n'); }
+        catch (Exception ex) { sb.Append($"- **the pipe and the queue** (WO-218): not read ({ex.GetType().Name}: {ex.Message})\n\n"); }
         Crashes(inp, sb);
         Session(inp, sb);
         Marks(inp, sb);
@@ -139,8 +205,28 @@ public static class Briefing
         return start;
     }
 
-    private static IEnumerable<string> NativeLines(Input inp) =>
-        inp.Logs.Where(kv => kv.Key.StartsWith("kcdmp-native", StringComparison.OrdinalIgnoreCase)).OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => kv.Value);
+    /// <summary>WO-221 F: the native log's lines of this launch only -- one file (the DLL's own, else its mirror: they hold the same
+    /// lines and both were counted before), and of it the newest launch's lines. Read once per briefing.</summary>
+    private static IEnumerable<string> NativeLines(Input inp)
+    {
+        if (inp.NativeLaunch is null)
+        {
+            inp.NativeEntry = LaunchFilter.PickNative(inp.Logs.Keys);
+            inp.NativeLaunch = LaunchFilter.NativeNewest(inp.NativeEntry is null ? Array.Empty<string>() : inp.Logs[inp.NativeEntry]);
+        }
+        return inp.NativeLaunch.Lines;
+    }
+
+    /// <summary>WO-221 F: one line that says which launch every count below is of, and what was left out.</summary>
+    private static string LaunchLine(Input inp)
+    {
+        _ = NativeLines(inp);
+        static string One(string what, LaunchFilter.Result? r) =>
+            r is null ? $"{what}: none" : r.Launch is null ? $"{what}: {r.Lines.Count} line(s), no launch named (an older DLL: all counted)"
+                                        : $"{what}: launch L{r.Launch}, {r.Lines.Count} line(s) counted, {r.LeftOut} of other launches left out";
+        return $"**This launch only:** {One("the native log" + (inp.NativeEntry is null ? "" : $" ({inp.NativeEntry})"), inp.NativeLaunch)}; "
+             + $"{One("the detail probe", inp.AnimLaunch)}; {One("the session probe", inp.SessionLaunch)}.\n\n";
+    }
 
     // ---- I.1: the crashes, first ----
     private static void Crashes(Input inp, StringBuilder sb)
@@ -378,11 +464,31 @@ public static class Briefing
         int fell = agent.Count(x => x.Contains("WO202-DEATHFALL", StringComparison.Ordinal) && x.Contains("-> ragdoll down", StringComparison.Ordinal));
         int standing = agent.Count(x => x.Contains("WO202-DEATHFALL", StringComparison.Ordinal) && x.Contains("STILL UPRIGHT", StringComparison.Ordinal));
         o.Add(new Score("bodies a joiner's blow killed without the death reaction: laid down / still upright", $"{fell} / {standing}", "every one down"));
-        var draws = agent.Count(x => x.Contains("WO202-DRAW", StringComparison.Ordinal) && x.Contains("played", StringComparison.Ordinal));
-        o.Add(new Score("weapon draws played on copies", draws.ToString(CultureInfo.InvariantCulture), "every draw the host's NPC makes"));
+        // WO-214 E: nothing ever printed WO202-DRAW (this score read 0 in every session); a copy's draw is the mod's WO214-DRAW ... played (the
+        // host NPC's own hand drawn on its copy) and its WO167-WEAPON line; the host NPC's draws the agent was told of: WO214-DRAW ... told=draw
+        int draws = agent.Concat(Kcd(inp)).Count(x => (x.Contains("WO202-DRAW", StringComparison.Ordinal) || x.Contains("WO214-DRAW", StringComparison.Ordinal)) && x.Contains(" played", StringComparison.Ordinal));
+        int told = agent.Count(x => x.Contains("WO214-DRAW", StringComparison.Ordinal) && x.Contains("told=draw", StringComparison.Ordinal));
+        o.Add(new Score("weapon draws played on copies", told > 0 ? $"{draws} of {told} the host's NPCs made" : draws.ToString(CultureInfo.InvariantCulture), "every draw the host's NPC makes"));
+        // WO-214 F: the partner's figure holds the weapon he holds -- the mod's verdict per draw (WO214-HAND figure ... ok|fixed|failed)
+        var hands = agent.Where(x => x.Contains("WO214-HAND figure kcd2mp_", StringComparison.Ordinal)).Select(x => System.Text.RegularExpressions.Regex.Match(x, @"WO214-HAND figure kcd2mp_\d+ (ok|fixed|failed) ")).Where(m => m.Success).Select(m => m.Groups[1].Value).ToList();
+        if (hands.Count > 0)
+            o.Add(new Score("the partner's figure held his weapon", $"{hands.Count(h => h != "failed")} of {hands.Count} ({hands.Count(h => h == "fixed")} only after a fix)", "every one"));
         var w197 = agent.LastOrDefault(x => x.Contains("MP-W197-STATS", StringComparison.Ordinal));
         string recoils = w197 is null ? "n/a" : $"recoils {Rx(w197, "recoil_played")}, clinches {Rx(w197, "clinch_played")}";
         o.Add(new Score("recoils and clinches played", recoils, "every one the host's world plays"));
+        // WO-222 E: every swing of this player in a fight -- what it touched, whether the touch went to the host, and why the others did not
+        var w222Sw = native.Where(x => x.Contains("W222-SWING n=", StringComparison.Ordinal)).Select(x => Regex.Match(x, @"reason=(\S+)")).Where(m => m.Success).Select(m => m.Groups[1].Value).ToList();
+        if (w222Sw.Count > 0)
+        {
+            int touched = w222Sw.Count(r => r == "touched");
+            int sent = agent.Count(x => x.Contains("W222-SEND ", StringComparison.Ordinal) && x.Contains(" sent why=", StringComparison.Ordinal));
+            var through = w222Sw.Where(r => r is "in-reach-no-touch" or "not-hostile-here" or "held" or "dead").GroupBy(r => r).Select(g => $"{g.Key} {g.Count()}").ToList();
+            o.Add(new Score("this player's swings: made / touched a body / touches sent / passed through a body (by reason)",
+                $"{w222Sw.Count} / {touched} / {sent} / {(through.Count == 0 ? "0" : string.Join(", ", through))}", "every swing that meets a body counts"));
+        }
+        // WO-223 F: whom the enemies noticed first (the host's mod), and the copies that fought the wrong player (the joiner's DLL)
+        if (Wo223Briefing.NoticeValue(Kcd(inp)) is { } w223N) o.Add(new Score("enemies noticed the host / the joiner first", w223N, "whoever a camp would notice first in single-player"));
+        if (Wo223Briefing.CopyValue(native) is { } w223C) o.Add(new Score("copies fighting the wrong player", w223C, "0 s"));
         var pings = agent.Select(x => Ping.Match(x)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture)).ToList();
         o.Add(new Score("message latency (the network ping)", pings.Count == 0 ? "n/a" : $"p99 {Pct(pings, 99)} ms", "p99 < 1000 ms"));
         // WO-204 Act V: the game's own queue lag, a line of its own; a backgrounded game's queue apart (a minimised game runs slow)

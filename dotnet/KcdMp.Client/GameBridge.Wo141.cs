@@ -174,6 +174,12 @@ public partial class GameBridge
     {
         if (!ActivityCodec.TryDecode(body, out byte kind, out var rows)) { Console.WriteLine($"MP-W141 malformed activity frame from {src} ({body.Length} bytes)"); return; }
         Interlocked.Add(ref _w141RowsIn, rows.Count);
+        await Wo141OnRowsAsync(type, src, kind, rows);
+    }
+
+    /// <summary>WO-218 A.1: a frame's rows, decoded (the activity lane's batch hands one body's row at a time).</summary>
+    private async Task Wo141OnRowsAsync(int type, byte src, byte kind, IReadOnlyList<ActivityRow> rows)
+    {
         if (type == Protocol.ActivityHostDown)
         {
             if (!W141Joiner) return;
@@ -181,6 +187,7 @@ public partial class GameBridge
             {
                 if (kind == Protocol.ActivityKindNpc)
                 {
+                    if (Wo216Lined(r.Name)) { Interlocked.Increment(ref _w216RowsRetired); continue; }   // WO-216 C: the line is this body's one path
                     _w141HostRows[r.Name] = r.A;
                     if (_w141Blocked.ContainsKey(r.Name) || W151InFight(r.Name)) continue;   // WO-151 1.1: not before the block tick either
                     await Wo141ApplyAsync(r.Name, r.A, "host");
@@ -272,7 +279,9 @@ public partial class GameBridge
     /// <summary>WO-137's talk (w137_talk on|off npc): the copy's own brain has it for the conversation.</summary>
     private void Wo141OnTalk(bool on, string npc)
     {
+        bool was = _w141Talking.ContainsKey(npc);
         if (on) _w141Talking[npc] = true; else _w141Talking.TryRemove(npc, out _);
+        if (was != on) Wo221OnTalk(on, npc);   // WO-221 B (mp_talk_hold): the DLL's lanes ask nothing of it meanwhile
     }
 
     // ---------------------------------------------------------------- a new joiner

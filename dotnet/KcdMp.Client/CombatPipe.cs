@@ -22,7 +22,7 @@ namespace KcdMp.Client;
 /// is not injected, combat replication is simply unavailable and the agent says
 /// so once rather than failing on every packet.
 /// </summary>
-public sealed class CombatPipe : IAsyncDisposable
+public sealed partial class CombatPipe : IAsyncDisposable
 {
     private readonly string _pipeName;
 
@@ -122,7 +122,6 @@ public sealed class CombatPipe : IAsyncDisposable
     private const int GuidLen = 16;
 
     private const byte LocalHit = 0x90;
-    private const byte LocalStatePush = 0xAF;   // WO-212, unsolicited: [captureMs:4][the 0x86 body]
     private const byte LocalDowned    = 0x91;   // WO-113, unsolicited
     private const byte LocalRespawned = 0x92;   // WO-113, unsolicited
     private const byte LocalGrave     = 0x93;   // WO-113, unsolicited
@@ -232,96 +231,122 @@ public sealed class CombatPipe : IAsyncDisposable
         return (f, b);
     }
 
-    private async Task EnterGateAsync(CancellationToken ct)
+    // True when the caller holds the other calls' line too (OwnLine): it is released with the gate.
+    private async Task<bool> EnterGateAsync(CancellationToken ct)
     {
         long id = Interlocked.Increment(ref _gateWaiterSeq);
         _gateWaiters[id] = (Environment.TickCount64, Wo207Trace.Kind.Value != 0);
-        try { await EnterGateInnerAsync(ct); }
+        try { return await EnterGateInnerAsync(ct); }
         finally { _gateWaiters.TryRemove(id, out _); }
     }
 
-    private async Task EnterGateInnerAsync(CancellationToken ct)
+    /// <summary>
+    /// WO-213 D.4 (mp_figure_band): a call made with this set goes through the gate before every other -- the position loop's read of the
+    /// local player, which the DLL answers at once from its frame's own read. It used to wait behind the frame handlers' and the polls'
+    /// main-thread calls (one a frame): the field's figures went out every 58 ms at the median, 113 ms at p90.
+    /// </summary>
+    public static readonly AsyncLocal<bool> Priority = new();
+    private int _priorityWaiting;
+
+    /// <summary>
+    /// WO-213 D.4: the other calls' own line. With one first-come line at the gate a priority call went ahead only of the callers that
+    /// still had a give-way left: on a busy host every waiting poll had already given way to an earlier read, and the position read
+    /// waited behind all of them (55 ms at the gate on average in the village, 101 in a fight; the figure out every 168 / 216 ms -- 8 ms
+    /// while the give-ways were unbounded, which starved the polls). The other calls now wait on this line first (frames first, as
+    /// before) and only its head waits at the gate: a priority call waits for one call at most (9 / 13 ms, the figure every 34 / 48 ms),
+    /// and a give-way costs no caller its place. False: the twin.
+    /// </summary>
+    public bool OwnLine { get; set; } = true;
+    private readonly SemaphoreSlim _line = new(1, 1);
+
+    private async Task<bool> EnterGateInnerAsync(CancellationToken ct)
     {
-        // The player's own position read goes before everything: the partner's view of this player moves at the rate of this read.
-        // Measured on a joiner: the pipe was full at one request a frame and the read waited ~400 ms, up to 3.7 s, so the partner saw stutter.
-        if (PositionFirst && _positionRead.Value)
+        if (Priority.Value)
         {
-            Interlocked.Increment(ref _positionWaiting);
+            Interlocked.Increment(ref _priorityWaiting);
             try { await _gate.WaitAsync(ct); }
-            finally { Interlocked.Decrement(ref _positionWaiting); }
+            finally { Interlocked.Decrement(ref _priorityWaiting); }
+            return false;
+        }
+        if (!OwnLine) { await FirstComeAsync(ct); return false; }
+        await TakeLineAsync(ct);
+        try { await GateBehindPriorityAsync(ct, PriorityYields); }
+        catch { _line.Release(); throw; }
+        return true;
+    }
+
+    // The other calls' line: frames first (WO-207 B.3) -- a frame's call goes ahead of the waiting polls, a poll gives way to them
+    // FrameYields times
+    private async Task TakeLineAsync(CancellationToken ct)
+    {
+        if (FramesFirst && Wo207Trace.Kind.Value != 0)
+        {
+            Interlocked.Increment(ref _framesWaiting);
+            try { await _line.WaitAsync(ct); }
+            finally { Interlocked.Decrement(ref _framesWaiting); }
             return;
         }
-        bool frame = FramesFirst && Wo207Trace.Kind.Value != 0;
-        if (frame) Interlocked.Increment(ref _framesWaiting);
-        try
+        int frameYields = FramesFirst ? FrameYields : 0;
+        while (true)
         {
-            while (true)
-            {
-                await _gate.WaitAsync(ct);
-                if (!PipeGateRules.MustYield(Volatile.Read(ref _positionWaiting), frame, FramesFirst, Volatile.Read(ref _framesWaiting))) return;
-                _gate.Release();   // someone with priority waits: they go first
-                await Task.Delay(1, ct);
-            }
+            await _line.WaitAsync(ct);
+            if (Volatile.Read(ref _framesWaiting) == 0 || frameYields-- <= 0) return;
+            _line.Release();   // a frame's handler waits: it goes first
+            await Task.Delay(1, ct);
         }
-        finally { if (frame) Interlocked.Decrement(ref _framesWaiting); }
     }
 
-    /// <summary>The player's own position read passes the gate first, at most once per <see cref="PositionReadMinMs"/>.</summary>
-    public bool PositionFirst { get; set; } = true;
-    /// <summary>About the cadence a host reaches on its own (p50 75 ms): more would only take pipe slots from the other work.</summary>
-    internal const int PositionReadMinMs = 66;
-    private int _positionWaiting;
-    private long _lastPositionReadAt;
-    private static readonly AsyncLocal<bool> _positionRead = new();
-
-    // WO-212: the DLL's own state push. No pipe slot per sample, and the stamp is the moment of the read. Silent for longer than
-    // PushFreshMs (an older DLL, a load, a lost pipe): the request path above takes over by itself.
-    private sealed record PushedState(LocalState State, uint CaptureMs, long AtMs);
-    private const long PushFreshMs = 250, PushArmEveryMs = 4000;
-    private static readonly TimeSpan PushWait = TimeSpan.FromMilliseconds(80);
-    private PushedState? _pushed;
-    private ulong _lastPushedFrame;
-    private long _pushArmedAt;
-    private TaskCompletionSource _pushTick = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    /// <summary>When the last state from <see cref="ReadLocalStateAsync"/> was read in the game (the sender clock); null = a request's answer.</summary>
-    public uint? LastCaptureMs { get; private set; }
-
-    private void OnLocalStatePush(byte[] body)
+    // The twin (OwnLine false): every caller in one first-come line at the gate
+    private async Task FirstComeAsync(CancellationToken ct)
     {
-        if (body.Length < 4 || !LocalStateCodec.TryParse(body.AsSpan(4), out var st, out _)) return;
-        BodyStateUnknownTags += LocalStateCodec.UnknownTags(body.AsSpan(4));
-        Volatile.Write(ref _pushed, new PushedState(st, BinaryPrimitives.ReadUInt32LittleEndian(body), Environment.TickCount64));
-        Interlocked.Exchange(ref _pushTick, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
-    }
-
-    private void KeepPositionPushAlive()
-    {
-        long now = Environment.TickCount64;
-        if (now - Volatile.Read(ref _pushArmedAt) < PushArmEveryMs) return;
-        Volatile.Write(ref _pushArmedAt, now);
-        _ = Task.Run(async () =>
+        int yields = PriorityYields;   // one call's give-way to priority calls, counted over all its tries
+        if (!FramesFirst) { await GateBehindPriorityAsync(ct, yields); return; }
+        if (Wo207Trace.Kind.Value != 0)
         {
-            try { await Wo163Async(Protocol.Wo212OpPositionPush, [1]); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { Console.WriteLine($"[combat] position push not armed: {ex.Message}"); }
-        });
-    }
-
-    /// <summary>The newest pushed state, waiting briefly for one newer than the last taken. Null = no live push.</summary>
-    private async Task<PushedState?> TakePushedStateAsync(CancellationToken ct)
-    {
-        var next = Volatile.Read(ref _pushTick).Task;   // before the read: a push landing in between completes it
-        var p = Volatile.Read(ref _pushed);
-        if (p is null || Environment.TickCount64 - p.AtMs > PushFreshMs) return null;
-        if (p.State.Frame == _lastPushedFrame)
-        {
-            try { await next.WaitAsync(PushWait, ct); }
-            catch (TimeoutException) { }
-            p = Volatile.Read(ref _pushed);
-            if (p is null || Environment.TickCount64 - p.AtMs > PushFreshMs) return null;
+            Interlocked.Increment(ref _framesWaiting);
+            try { await GateBehindPriorityAsync(ct, yields); }
+            finally { Interlocked.Decrement(ref _framesWaiting); }
+            return;
         }
-        _lastPushedFrame = p.State.Frame;
-        return p;
+        int frameYields = FrameYields;   // WO-213: a poll's give-way to frames' calls is bounded too
+        while (true)
+        {
+            yields = await GateBehindPriorityAsync(ct, yields);
+            if (Volatile.Read(ref _framesWaiting) == 0 || frameYields-- <= 0) return;
+            _gate.Release();   // a frame's handler waits: it goes first
+            await Task.Delay(1, ct);
+        }
+    }
+
+    /// <summary>
+    /// WO-213: how many times one poll gives way to frames' calls (WO-207 B.3) before it keeps its place -- a ceiling for the worst case
+    /// only (16 give-ways, each a re-queue): at 4, frames' handlers (the activity lane) waited behind polls and fell 10-27 s behind. The
+    /// joined talk's camera samples, the stream that starved the listener's polls (4 s at the median, 175 s at worst), take the priority
+    /// path instead (GameBridge.Wo207ConvLaneAsync). <see cref="int.MaxValue"/>: no bound (the twin, WO-207's rule).
+    /// </summary>
+    public int FrameYields { get; set; } = 16;
+
+    /// <summary>
+    /// How many times one call gives way to priority calls before it keeps its place. On one first-come line (OwnLine's twin) each
+    /// give-way put it at the back of the line: the position read and the NPC feed call many times a second, and given way without a
+    /// bound the joiner's polls waited 18 s at the median (833 s at worst), a joined talk's listener took 66 s to join, four give-ways
+    /// still left them 12 s behind in a talk. With OwnLine only the line's head gives way, behind that one call.
+    /// <see cref="int.MaxValue"/>: no bound (the twin).
+    /// </summary>
+    public int PriorityYields { get; set; } = 1;
+
+    // The gate, once no priority call waits for it (one holds it well under a millisecond: the DLL answers it from its frame's read) --
+    // or once this call has given way its PriorityYields times: then it keeps its place. Returns the give-ways left.
+    private async Task<int> GateBehindPriorityAsync(CancellationToken ct, int yieldsLeft)
+    {
+        while (true)
+        {
+            await _gate.WaitAsync(ct);
+            if (yieldsLeft <= 0 || Volatile.Read(ref _priorityWaiting) == 0) return yieldsLeft;
+            _gate.Release();
+            yieldsLeft--;
+            await Task.Yield();
+        }
     }
     private bool _warnedUnavailable;
 
@@ -869,12 +894,14 @@ public sealed class CombatPipe : IAsyncDisposable
 
     /// <summary>op 2: engage (or release) a bound copy against the local player with the host NPC's combat state.</summary>
     public async Task<(bool Ok, bool First, bool Skirmish, float DistM, byte Reason)> Wo132EngageAsync(bool on, uint eid, BodyState2 st, CancellationToken ct = default,
-                                                                                                    bool intentInRange = false)
+                                                                                                    bool intentInRange = false, bool flee = false)
     {
         // WO-187 A1: a trailing byte says the host's own NPC is within range of this player and targets him (the copy may lag): the DLL then
         // engages a copy farther than its range here; without it the short form (an older DLL takes only that)
-        var a = new byte[1 + 4 + BodyState2.Len + (intentInRange ? 1 : 0)];
-        if (intentInRange) a[^1] = 1;
+        // WO-222 D: a second trailing byte -- the host's NPC flees: engaged without the combat hold, farther (a WO-222 DLL takes it)
+        var a = new byte[1 + 4 + BodyState2.Len + (flee ? 2 : intentInRange ? 1 : 0)];
+        if (intentInRange) a[1 + 4 + BodyState2.Len] = 1;
+        if (flee) a[^1] = 1;
         a[0] = B(on);
         BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), eid);
         st.Write(a.AsSpan(5));
@@ -2125,10 +2152,9 @@ public sealed class CombatPipe : IAsyncDisposable
             while (_pipe?.IsConnected == true)
             {
                 var (type, body) = await ReadFrameAsync(CancellationToken.None);
-                if (type == LocalStatePush) { OnLocalStatePush(body); continue; }   // WO-212: 20 a second, never logged
                 // WO-118: replies are logged by their callers; 0x81/0x86/0x89
                 // arrive at frame-feed and heartbeat rates and would flood.
-                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut or NpcCombatOut or Wo132Reply or Wo131Reply or Wo137Reply or QuestChangeOut))
+                if (type is not (Result or LocalStateReply or NpcStatusReply or BodyStateReply or LocalAction or PvpHitOut or NpcCombatOut or Wo132Reply or Wo131Reply or Wo137Reply or QuestChangeOut or BatchReply))
                     Console.WriteLine($"[combat] pipe frame 0x{type:X2} ({body.Length} bytes)");
                 if (type == LocalHit && body.Length >= 24)
                 {
@@ -2313,6 +2339,7 @@ public sealed class CombatPipe : IAsyncDisposable
                         catch (Exception ex) { Console.WriteLine($"[npctrace] trace-done not handled: {ex.Message}"); }
                     }
                 }
+                else if (type == BatchReply) OnBatchReply(body);   // WO-218 A.1: never through the single requests' line
                 else if (!_replies.Writer.TryWrite((type, body)))
                 {
                     // DropOldest means TryWrite only fails on a completed
@@ -2409,21 +2436,6 @@ public sealed class CombatPipe : IAsyncDisposable
     public async Task<LocalState?> ReadLocalStateAsync(CancellationToken ct = default)
     {
         var payload = new byte[4];   // entityId 0 = the local player (reserved for a per-entity read)
-        LastCaptureMs = null;
-        if (PositionFirst)
-        {
-            KeepPositionPushAlive();
-            if (await TakePushedStateAsync(ct) is { } pushed)
-            {
-                LocalStateReads++;
-                LastCaptureMs = pushed.CaptureMs;
-                return pushed.State;
-            }
-            long wait = Volatile.Read(ref _lastPositionReadAt) + PositionReadMinMs - Environment.TickCount64;
-            if (wait > 0) await Task.Delay((int)Math.Min(wait, PositionReadMinMs), ct);
-            Volatile.Write(ref _lastPositionReadAt, Environment.TickCount64);
-            _positionRead.Value = true;   // flows into the gate below, and not back to the caller (an async method's own context)
-        }
         var (body, _) = await SendAndAwaitAsync(ReadLocalState, payload, LocalStateReply, ct);
         LocalStateReads++;
         if (body is null)
@@ -2525,9 +2537,10 @@ public sealed class CombatPipe : IAsyncDisposable
     {
         if (Wo210PipeBlock.Blocks(type, type == Wo163 && payload.Length > 0 ? payload[0] : -1)) return (null, PipeReason.NotConnected);   // WO-210 H.3's bisect only
         if (!await EnsureConnectedAsync(ct)) return (null, PipeReason.NotConnected);
+        if (UseBatch(type)) return await BatchSendAsync(type, payload, wantType, ct);   // WO-218 A.1: one round trip for every waiting request
 
         long gateAt = Environment.TickCount64;
-        await EnterGateAsync(ct);
+        bool line = await EnterGateAsync(ct);
         long sentAt = Environment.TickCount64;
         try
         {
@@ -2625,6 +2638,7 @@ public sealed class CombatPipe : IAsyncDisposable
         finally
         {
             _gate.Release();
+            if (line) _line.Release();
             Wo207Trace.Pipe(Wo207Trace.Kind.Value, (type << 8) | (payload.Length > 0 ? payload[0] : 0), sentAt - gateAt, Environment.TickCount64 - sentAt);   // WO-207 B.1: the gate's wait, the round trip (by frame type and its first byte: the op of a multiplexed type)
         }
     }
@@ -2640,8 +2654,13 @@ public sealed class CombatPipe : IAsyncDisposable
         // WO-144 5: the reader can drop the pipe while a command waits at the gate; a null pipe
         // here was the field's NullReferenceException in every tick after the game died
         var pipe = _pipe ?? throw new IOException("pipe closed");
-        await pipe.WriteAsync(frame, ct);
-        await pipe.FlushAsync(ct);
+        await _writeLock.WaitAsync(ct);   // WO-218 A.1: the batch's pump writes outside the gate
+        try
+        {
+            await pipe.WriteAsync(frame, ct);
+            await pipe.FlushAsync(ct);
+        }
+        finally { _writeLock.Release(); }
     }
 
     private async Task<(byte Type, byte[] Body)> ReadFrameAsync(CancellationToken ct)
@@ -2677,6 +2696,7 @@ public sealed class CombatPipe : IAsyncDisposable
         _replies.Writer.TryComplete();
         _replies = NewReplyChannel();
         _expectedSeq = null;
+        OnDropBatch();   // WO-218 A.1: the waiting batch and its line fail at once; the next connection is probed again
         if (had) Console.WriteLine("[combat] lost the connection to KCDMP.dll");
     }
 
@@ -2686,6 +2706,7 @@ public sealed class CombatPipe : IAsyncDisposable
         _pipe = null;
         _replies.Writer.TryComplete();
         _gate.Dispose();
+        _line.Dispose();
         return ValueTask.CompletedTask;
     }
 }

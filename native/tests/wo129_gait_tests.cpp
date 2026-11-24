@@ -51,6 +51,12 @@ int wo208_tests(int* passed);              // wo208_tests.cpp (WO-208: the switc
 int wo209_tests(int* passed);              // wo209_tests.cpp (WO-209: the switch word, the opponent mirror, the copy's own attack, the owner on every copy)
 int wo210_tests(int* passed);              // wo210_tests.cpp (WO-210: the switch word, the whole-body families, the watchdog, the clinch-loop detector)
 int wo211_tests(int* passed);              // wo211_tests.cpp (WO-211: the UI-dispatch guard, the overflow reseat, build ids)
+int wo214_tests(int* passed);              // wo214_tests.cpp (WO-214: one bind, the owner's base, combat end)
+int wo215_tests(int* passed);              // wo215_tests.cpp (WO-215: the route, the gait, the ladder, dormant, the ghost fight)
+int wo216_tests(int* passed);
+int wo218_tests(int* passed);              // wo218_tests.cpp (WO-218: the pipe's batch)
+int wo217_tests(int* passed);              // wo217_tests.cpp (WO-217: the world around the bodies)              // wo216_tests.cpp (WO-216: the host's request replayed, no brains on the joiner)
+int wo213_tests(int* passed);              // wo213_tests.cpp (WO-213: bands, the play-out delay, late postures)
 int wo203_tests(int* passed);              // wo203_tests.cpp (WO-203: every area's rules, one file per area)
 int wo197_tests(int* passed);              // wo197_tests.cpp (WO-197: the recoil and clinch polls, the kept main actions, the pair request)
 int wo194_tests(int* passed);              // wo194_tests.cpp (WO-194: the hold, its release, the time gate, the FastForward stop)
@@ -387,6 +393,54 @@ int main() {
     {
         int fp = 0;
         const int ff = wo211_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-213: bands, the play-out delay, late postures
+    {
+        int fp = 0;
+        const int ff = wo213_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-214: a turn is a change, one bind per body, the owner's base, a combat action ends with its fight
+    {
+        int fp = 0;
+        const int ff = wo214_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-215: the route (the engine's own movement request), the gait, the ladder, dormant bodies, the ghost fight
+    {
+        int fp = 0;
+        const int ff = wo215_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-216: the host's request replayed on its copy, no brain runs on the joiner
+    {
+        int fp = 0;
+        const int ff = wo216_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-217: the world around the bodies
+    {
+        int fp = 0;
+        const int ff = wo217_tests(&fp);
+        g_pass += fp;
+        g_fail += ff;
+    }
+
+    // WO-218: the pipe's batch
+    {
+        int fp = 0;
+        const int ff = wo218_tests(&fp);
         g_pass += fp;
         g_fail += ff;
     }

@@ -41,7 +41,7 @@ public partial class GameBridge
         // B.5: the processor's lag, and downstream of it the console's and the pipe's oldest frame-driven waits (bg = the agent's own loops)
         var (luaF, luaB) = _httpForMenu is { } h ? h.OldestWaitMs() : (0, 0);
         var (pipeF, pipeB) = _combat.OldestGateWaitMs();
-        Console.WriteLine($"MP-W207-Q lag_ms={Wo202QueueLagMs()} waiting={Wo207Trace.WaitingTotal} by={Wo207Trace.WaitingLine()} lua_ms={luaF} pipe_ms={pipeF} lua_bg_ms={luaB} pipe_bg_ms={pipeB}");
+        Console.WriteLine($"MP-W207-Q lag_ms={Wo202QueueLagMs()} waiting={Wo207Trace.WaitingTotal} by={Wo207Trace.WaitingLine()} lua_ms={luaF} pipe_ms={pipeF} lua_bg_ms={luaB} pipe_bg_ms={pipeB} act_lag_ms={Wo218ActLagMs()}");
         if (n % 40 == 0) Console.WriteLine("MP-W207-QK" + Wo207Trace.TakeLine());
         if (n % 240 == 60) Console.WriteLine($"MP-W207-STATS {Wo207LaneStats()} keep_awake={(config.KeepAwake ? "on" : "off")} {Wo207TimerStats()} stale_dropped={Interlocked.Read(ref _w207StaleDropped)} w121_stale={_w121EvStale} decouple={(W207("queue_decouple") ? "on" : "off")}");
     }
@@ -163,8 +163,12 @@ public partial class GameBridge
                 Interlocked.Increment(ref _w207ConvLaneFrames);
                 long wait = (Stopwatch.GetTimestamp() - f.Arrival) * 1000 / Stopwatch.Frequency;
                 if (wait > Interlocked.Read(ref _w207ConvLaneMaxWaitMs)) Interlocked.Exchange(ref _w207ConvLaneMaxWaitMs, wait);
-                // the listener's camera samples and lines go into its DLL first at the pipe's gate (mp_conv_pipe_first)
-                Wo207Trace.Kind.Value = W207("conv_pipe_first") ? Wo207Trace.ConvKind : 0;
+                // the listener's camera samples and lines go into its DLL first at the pipe's gate (mp_conv_pipe_first); WO-213: the camera
+                // samples (the DLL takes them off the main thread) the priority way -- as frames' calls, a talk's camera stream at its own
+                // rate (13.6 a second) kept the listener's polls waiting (4 s at the median); lines and options stay frames' calls
+                bool cam = W213On("link_sched") && LinkKinds.Of(f.Type, f.Payload) == "conv:" + Protocol.ConvCam;
+                CombatPipe.Priority.Value = cam;
+                Wo207Trace.Kind.Value = !cam && W207("conv_pipe_first") ? Wo207Trace.ConvKind : 0;
                 try { await Wo123OnFrameAsync(f.Type, f.Payload, ct); }
                 catch (Exception ex) { Console.WriteLine($"MP-W207 conv lane: a frame failed: {ex.GetType().Name}: {ex.Message}"); }
             }
@@ -186,15 +190,24 @@ public partial class GameBridge
             await foreach (var f in lane.ReadAllAsync(ct))
             {
                 if (Wo140DropSeparate(f.Type)) continue;   // WO-140: a joiner in its own world
+                Volatile.Write(ref _w218ActAtMs, W147StampMs(f.Arrival));   // WO-218: the lane's age (act_lag_ms)
                 Interlocked.Increment(ref _w207ActLaneFrames);
                 long wait = (Stopwatch.GetTimestamp() - f.Arrival) * 1000 / Stopwatch.Frequency;
                 if (wait > Interlocked.Read(ref _w207ActLaneMaxWaitMs)) Interlocked.Exchange(ref _w207ActLaneMaxWaitMs, wait);
+                if (W218On("pipe_batch") && _combat.BatchActive)   // WO-218 A.1: every waiting frame at once, coalesced, the bodies together
+                {
+                    try { await Wo218ActivityBatchAsync(f, lane, ct); }
+                    catch (Exception ex) { Console.WriteLine($"MP-W218 activity lane: a batch failed: {ex.GetType().Name}: {ex.Message}"); }
+                    if (lane.CanCount && lane.Count == 0) Volatile.Write(ref _w218ActAtMs, 0);
+                    continue;
+                }
                 Wo207Trace.Kind.Value = f.Type;
                 long t0 = Stopwatch.GetTimestamp();
                 try { await Wo123OnFrameAsync(f.Type, f.Payload, ct); }
                 catch (Exception ex) { Console.WriteLine($"MP-W207 activity lane: a frame failed: {ex.GetType().Name}: {ex.Message}"); }
                 Wo207Trace.Frame(f.Type, wait, (Stopwatch.GetTimestamp() - t0) * 1000 / Stopwatch.Frequency);
                 Wo207Trace.Kind.Value = 0;
+                if (lane.CanCount && lane.Count == 0) Volatile.Write(ref _w218ActAtMs, 0);
             }
         }
         catch (OperationCanceledException) { }

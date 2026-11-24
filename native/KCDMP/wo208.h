@@ -26,6 +26,14 @@ int status(char* out, int n);
 // WO-210 0.3: an owned copy's host NPC FullBody as the owner last applied it (the probe's "hf"); false when not owned or unknown
 bool host_fullbody(uint32_t eid, uint8_t* cls, uint32_t* frag);
 bool probe_owned(uint32_t eid);
+// WO-221 C.1: the family of the host NPC's FullBody state as the owner last had it (wo208_rules.h Fam), 0xFF when the owner has no
+// word for this copy. Main thread.
+uint8_t host_family(uint32_t eid);
+// WO-216 F.4 / G (main thread): the host's combat row for an owned copy, played by the owner -- the row's own fragment queued the game's
+// way (ghost_swing), the owner's own full-body action retired before it, and the full body held for the row (nothing of the owner's
+// installed, withdrawn or reseated over it) -- never refused as "owner-owns" (WO-214 D.2). The result is the swing's.
+int owner_play_row(uint32_t eid, const char* spec);   // rttr::SwingResult as an int
+int owner_rows_status(char* out, int n);
 // The same for the writers of a copy's COMBAT STATE (its engagement in the player's fight, its strike window, its opponent, its guard
 // hold): only the bench's A.1 copy (driven "only from the recorded state"); with the owner on every copy they stay (the owner's rule 7:
 // combat relations are read, never rewritten by it, and Part B needs the engagement and the strike window).
@@ -43,5 +51,27 @@ bool in_player_fight(uint32_t copy);
 double owner_shift_s(uint32_t eid);
 // WO-211 C.3 (main thread): an over-full copy reseated the clean way. 1 reseated, 2 not an owned copy, 3 too soon.
 uint8_t overflow_reseat(uint32_t eid, const char* name, double everyS);
+
+// WO-213 E.3: the owner's last check found this copy and its host NPC in a posture (sitting, lying, kneeling, working) -- the position
+// writer leaves it where it sits. Main thread.
+bool posture_holds(uint32_t eid);
+
+// WO-215 (main thread): the watchdog's new outcomes -- [0] bases given by the ladder, [1] activities refused here (activity_missing events),
+// [2] refused-rest checks, [3] dormant-host parks asked, [4] stale-ours reseats, [5] checks left to the NPC-state placement; and the copies
+// missing their host's activity now
+void w215_counters(uint32_t out[6], uint32_t* missingNow);
+
+// WO-217 A.0 / 0.2 (main thread): the pieces wo217.cpp's attempt lines and seated-copy rule read
+bool fragment_name_of(uint32_t eid, uint32_t frag, char* out, size_t n);   // the body's own mannequin name of a fragment
+const char* pfam_text(uint8_t fam);                                          // wo210rules::PFam's name
+bool pfam_is_posture(uint8_t fam);
+// the context of an attempt's open: WO-141's activity for the body, its path, the neutral rule, the copy's distance from the local player and
+// from the activity's object (-1: none)
+void place_context(uint32_t eid, const char* name, char* act, size_t n, int* path, bool* neutral, float* dist, float* objDist);
+// 0.2: the watchdog's newest word on a copy -- its host NPC seated (sitting or lying) and the copy in that posture; false: not owned
+bool seat_state(uint32_t eid, bool* hostSeated, bool* copySeated);
+double last_install_age_s(uint32_t eid);
+// WO-217 0.2: the copy's own seat released the game's way (the agent's op-140 release: WO-160's stance reset), at most every 3 s
+bool ask_release(uint32_t eid, const char* name);   // seconds since the owner last installed an action on this copy (1e9: never)
 
 } // namespace kcdmp::wo208

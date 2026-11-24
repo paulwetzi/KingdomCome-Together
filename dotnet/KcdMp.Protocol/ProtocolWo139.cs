@@ -70,15 +70,16 @@ public static partial class Protocol
     public const byte CrimeAskReport = 1, CrimeAskOutcome = 2, CrimeAskResync = 3, CrimeAskEndFights = 4, CrimeAskClear = 5,   // WO-212: "clear" | "off" | "on"
                       CrimeAskHorse = 6;   // WO-214: "<x> <y> <z> <rot> here|ridden|gone", this player's called horse
     /// <summary>WO-212: the native op that releases the input filter "no_inventory".</summary>
-    public const byte Wo212OpInputFilter = 150;
-    /// <summary>WO-212: the keep-alive of the DLL's own position push.</summary>
-    public const byte Wo212OpPositionPush = 151;
-    /// <summary>WO-212: the shop's own open / close call for a joiner's copy of a keeper.</summary>
-    public const byte Wo212OpShopKeeper = 152;
+    public const byte Wo212OpInputFilter = 240;   // fixed-soul build: 150-153 are the official WO-215's
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
                       CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8,
-                      CrimeHostPeerHorse = 9;   // WO-214: tok = the owner's ghost id, text as CrimeAskHorse
+                      CrimeHostBagBase = 12,       // WO-221 D.4: "<horse> <part> <parts> <class:units,...|->" -- what the host's horse carries (a join)
+                      CrimeHostBagTake = 13,       // WO-221 D.4: "<tok> <horse> <class> <units>" -- the partner took this from the owner's horse
+                      CrimeHostCorpseLooks = 11,   // WO-221 E.1: "<body>=<12 hex: six zones of blood>,..." -- the wounds of the host's dead bodies
+                      CrimeHostHorseOwners = 10,   // WO-221 D: "<horse>=<owner key, 8 hex>,..." or "-" -- the host's record of whose horse is whose
+                      CrimeHostKeepers = 9,   // WO-221 B: "<part> <parts> <name>=<shop db id>,..." -- which shop each keeper near the players keeps
+                      CrimeHostPeerHorse = 14;   // fixed-soul build: tok = the owner's ghost id, text as CrimeAskHorse
 
     public static string CrimeAskName(byte k) => k switch
     {
@@ -88,7 +89,7 @@ public static partial class Protocol
     public static string CrimeHostName(byte k) => k switch
     {
         CrimeHostJudged => "judged", CrimeHostStop => "stop", CrimeHostPursue => "pursue", CrimeHostRecord => "record",
-        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", CrimeHostPeerHorse => "peer-horse", _ => $"unknown-{k}",
+        CrimeHostHorses => "horses", CrimeHostCleared => "cleared", CrimeHostMode => "mode", CrimeHostShops => "shops", CrimeHostKeepers => "keepers", CrimeHostHorseOwners => "horse-owners", CrimeHostPeerHorse => "peer-horse", CrimeHostCorpseLooks => "corpse-looks", CrimeHostBagBase => "bag-base", CrimeHostBagTake => "bag-take", _ => $"unknown-{k}",
     };
 }
 

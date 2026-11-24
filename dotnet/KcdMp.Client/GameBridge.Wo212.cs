@@ -31,30 +31,6 @@ public partial class GameBridge
         await ExecLuaAsync($"if KCD2MP_W212KeysDone then KCD2MP_W212KeysDone({result}, \"{f[1]}\") end");
     }
 
-    /// <summary><c>w212_shop &lt;keeper&gt; &lt;0 close|1 open|2 ask&gt; &lt;shop entity hex&gt;</c>: the shop's own call for a joiner's copy.</summary>
-    private async Task Wo212OnShopAsync(string? arg)
-    {
-        var f = (arg ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (f.Length != 3 || !Wo139Text.IsName(f[0]) || f[1] is not ("0" or "1" or "2")
-            || !uint.TryParse(f[2], System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint shop)) return;
-        byte[] name = System.Text.Encoding.ASCII.GetBytes(f[0]);
-        if (name.Length > 63) return;
-        var a = new byte[6 + name.Length];
-        a[0] = (byte)(f[1][0] - '0');
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(a.AsSpan(1), shop);
-        a[5] = (byte)name.Length;
-        name.CopyTo(a, 6);
-        int result = -1, before = 0, after = 0;
-        try
-        {
-            var r = await _combat.Wo163Async(Protocol.Wo212OpShopKeeper, a);
-            if (r is { Ok: true, Payload.Length: >= 3 } x) { result = x.Payload[0]; before = x.Payload[1]; after = x.Payload[2]; }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException) { Console.WriteLine($"MP-W212 shop: {ex.Message}"); }
-        Console.WriteLine($"MP-W212 shop keeper={f[0]} mode={f[1]}: result {result}, open {before} -> {after}");
-        await ExecLuaAsync($"if KCD2MP_W212ShopDone then KCD2MP_W212ShopDone(\"{f[0]}\", {f[1]}, {result}, {before}, {after}) end");
-    }
-
     /// <summary><c>w212_crime clear|off|on</c>: a joiner asks its host; a host applies it to the partners only under the joint mode.</summary>
     private async Task Wo212OnCrimeAsync(string? arg)
     {
@@ -97,11 +73,11 @@ public partial class GameBridge
         Console.WriteLine($"MP-W212 host: ghost {peer}'s record cleared ({n} crime(s)) -- {why}");
     }
 
-    /// <summary>WO-214, <c>w214_horse &lt;x&gt; &lt;y&gt; &lt;z&gt; &lt;rot&gt; here|ridden|gone</c>: this player's called horse, told to the partners.</summary>
-    private async Task Wo214OnHorseAsync(string? arg)
+    /// <summary>Fixed-soul horse, <c>fs_horse &lt;x&gt; &lt;y&gt; &lt;z&gt; &lt;rot&gt; here|ridden|gone</c>: this player's called horse, told to the partners.</summary>
+    private async Task FsHorseOnEventAsync(string? arg)
     {
         string text = (arg ?? "").Trim();
-        if (!Wo214Horse.TryParse(text, out _)) return;
+        if (!FsHorse.TryParse(text, out _)) return;
         if (W139Joiner)
         {
             await Wo139SendAsync(Protocol.CrimeAskUp, Protocol.JoinTargetHost, Protocol.CrimeAskHorse, 0, text);
@@ -112,29 +88,29 @@ public partial class GameBridge
     }
 
     /// <summary>Host: a joiner's horse is shown here and passed on to any other joiner.</summary>
-    private async Task Wo214HostOnAskAsync(byte src, string text)
+    private async Task FsHorseHostOnAskAsync(byte src, string text)
     {
-        if (!Wo214Horse.TryParse(text, out var horse)) return;
-        await Wo214ShowAsync(src, horse);
+        if (!FsHorse.TryParse(text, out var horse)) return;
+        await FsHorseShowAsync(src, horse);
         foreach (byte peer in Wo134Peers())
             if (peer != src) await Wo139SendAsync(Protocol.CrimeHostUp, peer, Protocol.CrimeHostPeerHorse, src, text);
     }
 
-    private Task Wo214ShowAsync(byte owner, Wo214Horse h) => ExecLuaAsync(FormattableString.Invariant(
+    private Task FsHorseShowAsync(byte owner, FsHorse h) => ExecLuaAsync(FormattableString.Invariant(
         $"if KCD2MP_W214PeerHorse then KCD2MP_W214PeerHorse(\"{owner}\", {h.X:F2}, {h.Y:F2}, {h.Z:F2}, {h.Rot:F3}, \"{h.State}\") end"));
 }
 
-/// <summary>WO-214: the one text a called horse crosses the wire as. Checked field by field on both ends.</summary>
-internal readonly record struct Wo214Horse(float X, float Y, float Z, float Rot, string State)
+/// <summary>Fixed-soul horse: the one text a called horse crosses the wire as. Checked field by field on both ends.</summary>
+internal readonly record struct FsHorse(float X, float Y, float Z, float Rot, string State)
 {
-    public static bool TryParse(string? text, out Wo214Horse horse)
+    public static bool TryParse(string? text, out FsHorse horse)
     {
         horse = default;
         var f = (text ?? "").Split(' ');
         if (f.Length != 5 || f[4] is not ("here" or "ridden" or "gone")) return false;
         if (!Wo139Text.TryCoord(f[0], out float x) || !Wo139Text.TryCoord(f[1], out float y) || !Wo139Text.TryCoord(f[2], out float z)
             || !Wo139Text.TryCoord(f[3], out float rot)) return false;
-        horse = new Wo214Horse(x, y, z, rot, f[4]);
+        horse = new FsHorse(x, y, z, rot, f[4]);
         return true;
     }
 }

@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-206 -- the digest sweep and the animation probe (wo206.h). Read-only: nothing here writes to the game.
 #include "wo206.h"
+#include "wo218.h"
 #include "wo208.h"
 #include "wo208_rules.h"
 #include "wo210_rules.h"
@@ -12,6 +13,7 @@
 #include "wo187.h"
 #include "wo200.h"
 #include "wo203.h"
+#include "wo215.h"
 #include "engine.h"
 #include "fault_guard.h"
 #include "hits.h"
@@ -22,10 +24,15 @@
 #include "npc_scan.h"
 #include <windows.h>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -55,11 +62,28 @@ bool g_armed = false;
 size_t g_dirtyScan = 0;   // where the next DigestRead starts looking for dirty entries
 uint64_t c_reads = 0, c_found = 0, c_faults = 0;
 
+uint64_t c_budgetCuts = 0;   // WO-218 B.2: frames the digest stopped at its budget
+
 void digest_tick(double now) {
     if (!g_armed || g_paths.empty()) return;
     size_t first = 0;
     const size_t n = sweep_take(g_sweep, g_paths.size(), kPerFrame, now, kMinPassGapS, &first);
+    // WO-218 B.2 (digest_budget): at most kDigestBudgetUs of this frame (at least kDigestMinReads reads); the rest is given back
+    const bool budget = wo218::on(wo218::kBitMainBudget);
+    LARGE_INTEGER q0{}, qf{};
+    if (budget) { QueryPerformanceCounter(&q0); QueryPerformanceFrequency(&qf); }
     for (size_t i = first; i < first + n; ++i) {
+        if (budget && i - first >= wo218::kDigestMinReads) {
+            LARGE_INTEGER q1;
+            QueryPerformanceCounter(&q1);
+            if (static_cast<double>(q1.QuadPart - q0.QuadPart) * 1e6 / static_cast<double>(qf.QuadPart) >= wo218::kDigestBudgetUs) {
+                const size_t back = first + n - i;   // not read this frame: the cursor goes back to i
+                if (!g_sweep.inPass) { g_sweep.inPass = true; if (g_sweep.passes) --g_sweep.passes; }
+                g_sweep.cursor -= back;
+                ++c_budgetCuts;
+                break;
+            }
+        }
         uint8_t kind = 0; int32_t value = -1; bool found = false;
         KCDMP_FAULT_CALL(site, "wo206::digest_read");
         if (!fault::guarded(site, [&] { found = wo200::read_value(g_paths[i].c_str(), &kind, &value); })) { ++c_faults; continue; }
@@ -75,12 +99,8 @@ uint8_t g_machine = 0;
 double g_hz = kDefaultHz;
 float g_radius = kDefaultRadiusM;
 int g_scopeReads = kDefaultScopeReads;
-FILE* g_file = nullptr;
-bool g_truncated = false;
-std::string g_path;
-uint64_t g_fileBytes = 0;
-double g_lastSample = 0, g_lastFlush = 0;
-uint64_t c_lines = 0, c_bodies = 0, c_scopeReads = 0, c_skipped = 0, c_rotations = 0;
+double g_lastSample = 0;
+uint64_t c_lines = 0, c_bodies = 0, c_scopeReads = 0, c_skipped = 0;
 // the probe's own cost on the main thread (the bench: the probe alone took ~6 % of the frame rate), per part, logged every 10 s
 double c_tGather = 0, c_tScopes = 0, c_tLine = 0, g_lastCostLog = 0;
 uint64_t c_costSamples = 0;
@@ -91,20 +111,98 @@ std::unordered_map<uint32_t, ScopeCache> g_scopes;
 
 struct Body { uint32_t eid; const char* kind; };
 
-void open_file() {
-    if (g_file) return;
-    char cwd[MAX_PATH]{};
-    if (!GetCurrentDirectoryA(MAX_PATH, cwd) || !cwd[0]) return;
-    std::string p(cwd);
-    if (p.back() != '\\') p += '\\';
-    p += "kcdmp-anim.jsonl";
-    g_path = p;
-    g_file = _fsopen(p.c_str(), g_truncated ? "ab" : "wb", _SH_DENYWR);   // one file per game process: the first start truncates
-    g_truncated = true;
-    g_fileBytes = 0;
-    if (g_file) logf("WO206-PROBE writing %s (machine=%s %.0f Hz %.0f m, %d scope reads a sample)", p.c_str(), machine_name(g_machine), g_hz,
-                     g_radius, g_scopeReads);
-}
+// WO-221 F.1: a recorder's file, written off the main thread. The main thread hands over finished lines (push); the writer's own
+// thread opens the file (the first start of a game process truncates it, a rotation that had to wait appends), writes, flushes once
+// a second and rotates it at its size limit, keeping the one before -- what the main thread did itself until 0.65.0 (a flush or a
+// rotation in the frame: the area's 10 ms frames). A reader holding the file makes a rotation wait a second and try again (WO-213).
+// Nothing of the engine is touched on that thread: strings and a FILE only.
+struct Writer {
+    const char* fileName;
+    uint64_t maxBytes;
+    const char* openedLine;
+    std::mutex mu;
+    std::condition_variable cv, cvDone;
+    std::deque<std::string> q;
+    size_t qBytes = 0;
+    bool flushAsked = false, started = false;
+    uint64_t flushDone = 0;
+    std::string dir;
+    std::atomic<uint64_t> lines{0}, rotations{0}, rotateRetries{0}, dropped{0}, queueMax{0};
+
+    Writer(const char* name, uint64_t max, const char* opened) : fileName(name), maxBytes(max), openedLine(opened) {}
+
+    void push(std::string&& s) {   // main thread
+        std::unique_lock<std::mutex> l(mu);
+        if (!started) {
+            char cwd[MAX_PATH]{};
+            if (!GetCurrentDirectoryA(MAX_PATH, cwd) || !cwd[0]) return;
+            dir = cwd;
+            if (dir.back() != '\\') dir += '\\';
+            started = true;
+            std::thread([this] { run(); }).detach();
+        }
+        if (qBytes > (16u << 20)) { dropped.fetch_add(1, std::memory_order_relaxed); return; }   // a stuck disk never grows the queue without bound
+        qBytes += s.size();
+        if (qBytes > queueMax.load(std::memory_order_relaxed)) queueMax.store(qBytes, std::memory_order_relaxed);
+        q.push_back(std::move(s));
+        l.unlock();
+        cv.notify_one();
+    }
+    // main thread: what was handed over is on disk when this returns (at most 250 ms: the probe was switched off, the session ended)
+    void flush_now() {
+        std::unique_lock<std::mutex> l(mu);
+        if (!started) return;
+        const uint64_t want = flushDone + 1;
+        flushAsked = true;
+        cv.notify_one();
+        cvDone.wait_for(l, std::chrono::milliseconds(250), [&] { return flushDone >= want; });
+    }
+    void run() {
+        const std::string path = dir + fileName;
+        FILE* f = nullptr;
+        bool truncated = false;
+        uint64_t bytes = 0;
+        ULONGLONG lastFlush = GetTickCount64(), retryAt = 0;
+        for (;;) {
+            std::deque<std::string> batch;
+            bool flush = false;
+            {
+                std::unique_lock<std::mutex> l(mu);
+                cv.wait_for(l, std::chrono::milliseconds(500), [&] { return !q.empty() || flushAsked; });
+                batch.swap(q);
+                qBytes = 0;
+                flush = flushAsked;
+                flushAsked = false;
+            }
+            for (std::string& s : batch) {
+                if (!f) {
+                    f = _fsopen(path.c_str(), truncated ? "ab" : "wb", _SH_DENYWR);
+                    if (!truncated) bytes = 0;
+                    truncated = true;
+                    if (f) logf(openedLine, path.c_str());
+                }
+                if (!f) { dropped.fetch_add(1, std::memory_order_relaxed); continue; }
+                std::fwrite(s.data(), 1, s.size(), f);
+                bytes += s.size();
+                lines.fetch_add(1, std::memory_order_relaxed);
+                if (bytes > maxBytes && GetTickCount64() >= retryAt) {
+                    std::fclose(f); f = nullptr;
+                    const std::string prev = path.substr(0, path.size() - 6) + ".1.jsonl";
+                    if (MoveFileExA(path.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING)) { truncated = false; rotations.fetch_add(1, std::memory_order_relaxed); }
+                    else { rotateRetries.fetch_add(1, std::memory_order_relaxed); retryAt = GetTickCount64() + 1000; }
+                }
+            }
+            const ULONGLONG nowMs = GetTickCount64();
+            if (f && (flush || nowMs - lastFlush > 1000)) { std::fflush(f); lastFlush = nowMs; }
+            if (flush) {
+                { std::lock_guard<std::mutex> l(mu); ++flushDone; }
+                cvDone.notify_all();
+            }
+        }
+    }
+};
+Writer g_writer("kcdmp-anim.jsonl", kMaxFileBytes, "WO206-PROBE writing %s (a writer thread: the main thread only hands lines over)");
+Writer g_sWriter("kcdmp-anim-session.jsonl", 96ull << 20, "WO215-PROBE session file %s (one body a line, 20 lines a second; a writer thread)");
 
 void gather(std::vector<Body>& out, double now) {
     out.clear();
@@ -196,12 +294,82 @@ int queue_age_ms(uint32_t eid, const wo187::QueueInfo& q, double now, int* ages 
     return static_cast<int>((now - oldest) * 1000.0);
 }
 
+// WO-215 G: one body's JSON object (the detail sample's and the session line's), appended to line; false when the body is skipped
+bool body_json(const Body& b, double now, bool firstBody, std::string& line) {
+    char buf[768];
+    auto it = g_scopes.find(b.eid);
+    if (it == g_scopes.end() || it->second.at < 0 || now - it->second.at > kScopeMaxAgeS) { ++c_skipped; return false; }   // never "empty" by default
+    void* e = engine::entity_by_id(b.eid);
+    float p[3]{};
+    if (!e || !engine::entity_world_pos(e, p)) return false;
+    const char* nm = engine::entity_name(e);
+    char name[128];
+    json_escape(nm ? nm : "?", name, sizeof name);
+    const ScopeCache& c = it->second;
+    const char* fb = nullptr;
+    for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fb = c.sc[i].action;
+    const wo187::QueueInfo q = wo187::queue_info(b.eid);
+    // WO-207 G.1: how long the oldest queued action has waited without starting (the same action object still in the queue); G.2: the
+    // body's Mannequin tags (the fragment family a comparison needs)
+    int ages[16]{};
+    const int qa = queue_age_ms(b.eid, q, now, ages);
+    char qd[240] = "";   // [[flags,age_ms,priority],...] the first 6 queued actions
+    for (int i = 0, o = 0; i < q.nacts && i < 6 && o < static_cast<int>(sizeof qd) - 40; ++i)
+        o += std::snprintf(qd + o, sizeof qd - static_cast<size_t>(o), "%s[%u,%d,%d]", i ? "," : "", q.flags[i], ages[i], q.prio[i]);
+    // WO-207 G.1: a body whose physics is no living entity lies (a corpse, a knockdown's ragdoll), whatever its FullBody still holds
+    npcdrive::PhysicsStatus ps{};
+    const bool lying = npcdrive::physics_status(e, &ps) && ps.present && !ps.living;
+    uint8_t tg[20]{};
+    char tgh[41] = "";
+    if (wo187::tag_state(b.eid, tg, sizeof tg)) for (int i = 0; i < 20; ++i) std::snprintf(tgh + 2 * i, 3, "%02x", tg[i]);
+    std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"qa\":%d,\"qd\":[%s],\"tg\":\"%s\",\"sa\":%.0f,",
+                  firstBody ? "" : ",", name, b.kind, p[0], p[1], p[2], npcdrive::entity_yaw(e), wo172::copy_dead(b.eid) ? 1 : 0,
+                  (ragdoll_class(fb) || lying) ? 1 : 0, q.n < 0 ? 0 : q.n, qa, qd, tgh, (now - c.at) * 1000.0);
+    line += buf;
+    // WO-210 0.3: the combat state (combat mode, the model's state, the opponent), the FullBody's family by the game's fragment name,
+    // and on a copy the host NPC's FullBody family as the owner last applied it (the stale-posture and combat-idle instruments)
+    {
+        motion::ModelRead m{};
+        const bool mr = motion::read_model(b.eid, &m);
+        char opn[96] = "";
+        if (mr && m.opponentEid) { void* oe = engine::entity_by_id(m.opponentEid); const char* on = oe ? engine::entity_name(oe) : nullptr; json_escape(on ? on : "?", opn, sizeof opn); }
+        const char* fam = "empty";
+        const wo187::ScopeInfo* fbs = nullptr;
+        for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fbs = &c.sc[i];
+        if (fbs) { char fn[96] = ""; wo187::fragment_name(b.eid, fbs->frag, fn, sizeof fn); fam = wo210rules::pfam_name(wo210rules::family(wo208rules::class_id(fbs->action), fn, fbs->frag)); }
+        const char* hf = "-";
+        uint8_t hcls = 0; uint32_t hfr = 0;
+        if (std::strcmp(b.kind, "copy") == 0 && wo208::host_fullbody(b.eid, &hcls, &hfr)) {
+            char fn[96] = "";
+            wo187::fragment_name(b.eid, hfr, fn, sizeof fn);
+            hf = wo210rules::pfam_name(wo210rules::family(hcls, fn, hfr));
+        }
+        std::snprintf(buf, sizeof buf, "\"cm\":%d,\"cs\":%d,\"op\":\"%s\",\"fam\":\"%s\",\"hf\":\"%s\",\"sc\":[", mr && m.combatMode ? 1 : 0,
+                      mr && (m.valid & motion::kMvState) ? m.state : -1, opn, fam, hf);
+        line += buf;
+    }
+    bool firstScope = true;
+    for (int i = 0; i < c.n; ++i) {
+        const wo187::ScopeInfo& s = c.sc[i];
+        if (!s.ok || s.empty) continue;   // an empty scope is not listed (the format's rule)
+        char sn[48], an[96];
+        json_escape(s.name, sn, sizeof sn);
+        json_escape(s.action, an, sizeof an);
+        char fnm[96] = "", fne[112] = "";
+        if (wo187::fragment_name(b.eid, s.frag, fnm, sizeof fnm)) json_escape(fnm, fne, sizeof fne);   // WO-210 0.3: the game's own name
+        std::snprintf(buf, sizeof buf, "%s{\"s\":\"%s\",\"c\":\"%s\",\"fr\":%u,\"fn\":\"%s\",\"pr\":%d}", firstScope ? "" : ",", sn, an, s.frag, fne, s.prio);
+        line += buf;
+        firstScope = false;
+    }
+    line += "]}";
+    ++c_bodies;
+    return true;
+}
+
 void probe_tick(double now) {
     if (!g_probe.load(std::memory_order_relaxed)) return;
     if (now - g_lastSample < 1.0 / g_hz) return;
     g_lastSample = now;
-    open_file();
-    if (!g_file) return;
     static std::vector<Body> bodies;
     const double t0 = now_s();
     gather(bodies, now);
@@ -229,81 +397,13 @@ void probe_tick(double now) {
     std::string line;
     line.reserve(4096);
     char buf[768];   // WO-207: a body's line with its tags and queue detail (qd) runs past 512
-    std::snprintf(buf, sizeof buf, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"a\":[", static_cast<unsigned long long>(utc_ms()), machine_name(g_machine),
-                  main_thread::frame_count());
+    std::snprintf(buf, sizeof buf, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"L\":\"%06x\",\"a\":[", static_cast<unsigned long long>(utc_ms()), machine_name(g_machine),
+                  main_thread::frame_count(), launch_id());   // WO-221 F: the row's launch
     line += buf;
     bool firstBody = true;
-    for (const Body& b : bodies) {
-        auto it = g_scopes.find(b.eid);
-        if (it == g_scopes.end() || it->second.at < 0 || now - it->second.at > kScopeMaxAgeS) { ++c_skipped; continue; }   // never "empty" by default
-        void* e = engine::entity_by_id(b.eid);
-        float p[3]{};
-        if (!e || !engine::entity_world_pos(e, p)) continue;
-        const char* nm = engine::entity_name(e);
-        char name[128];
-        json_escape(nm ? nm : "?", name, sizeof name);
-        const ScopeCache& c = it->second;
-        const char* fb = nullptr;
-        for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fb = c.sc[i].action;
-        const wo187::QueueInfo q = wo187::queue_info(b.eid);
-        // WO-207 G.1: how long the oldest queued action has waited without starting (the same action object still in the queue); G.2: the
-        // body's Mannequin tags (the fragment family a comparison needs)
-        int ages[16]{};
-        const int qa = queue_age_ms(b.eid, q, now, ages);
-        char qd[240] = "";   // [[flags,age_ms,priority],...] the first 6 queued actions
-        for (int i = 0, o = 0; i < q.nacts && i < 6 && o < static_cast<int>(sizeof qd) - 40; ++i)
-            o += std::snprintf(qd + o, sizeof qd - static_cast<size_t>(o), "%s[%u,%d,%d]", i ? "," : "", q.flags[i], ages[i], q.prio[i]);
-        // WO-207 G.1: a body whose physics is no living entity lies (a corpse, a knockdown's ragdoll), whatever its FullBody still holds
-        npcdrive::PhysicsStatus ps{};
-        const bool lying = npcdrive::physics_status(e, &ps) && ps.present && !ps.living;
-        uint8_t tg[20]{};
-        char tgh[41] = "";
-        if (wo187::tag_state(b.eid, tg, sizeof tg)) for (int i = 0; i < 20; ++i) std::snprintf(tgh + 2 * i, 3, "%02x", tg[i]);
-        std::snprintf(buf, sizeof buf, "%s{\"n\":\"%s\",\"k\":\"%s\",\"p\":[%.3f,%.3f,%.3f],\"r\":[0,0,%.4f],\"dead\":%d,\"rag\":%d,\"q\":%d,\"qa\":%d,\"qd\":[%s],\"tg\":\"%s\",\"sa\":%.0f,",
-                      firstBody ? "" : ",", name, b.kind, p[0], p[1], p[2], npcdrive::entity_yaw(e), wo172::copy_dead(b.eid) ? 1 : 0,
-                      (ragdoll_class(fb) || lying) ? 1 : 0, q.n < 0 ? 0 : q.n, qa, qd, tgh, (now - c.at) * 1000.0);
-        line += buf;
-        // WO-210 0.3: the combat state (combat mode, the model's state, the opponent), the FullBody's family by the game's fragment name,
-        // and on a copy the host NPC's FullBody family as the owner last applied it (the stale-posture and combat-idle instruments)
-        {
-            motion::ModelRead m{};
-            const bool mr = motion::read_model(b.eid, &m);
-            char opn[96] = "";
-            if (mr && m.opponentEid) { void* oe = engine::entity_by_id(m.opponentEid); const char* on = oe ? engine::entity_name(oe) : nullptr; json_escape(on ? on : "?", opn, sizeof opn); }
-            const char* fam = "empty";
-            const wo187::ScopeInfo* fbs = nullptr;
-            for (int i = 0; i < c.n; ++i) if (c.sc[i].ok && !c.sc[i].empty && std::strcmp(c.sc[i].name, "FullBody") == 0) fbs = &c.sc[i];
-            if (fbs) { char fn[96] = ""; wo187::fragment_name(b.eid, fbs->frag, fn, sizeof fn); fam = wo210rules::pfam_name(wo210rules::family(wo208rules::class_id(fbs->action), fn, fbs->frag)); }
-            const char* hf = "-";
-            uint8_t hcls = 0; uint32_t hfr = 0;
-            if (std::strcmp(b.kind, "copy") == 0 && wo208::host_fullbody(b.eid, &hcls, &hfr)) {
-                char fn[96] = "";
-                wo187::fragment_name(b.eid, hfr, fn, sizeof fn);
-                hf = wo210rules::pfam_name(wo210rules::family(hcls, fn, hfr));
-            }
-            std::snprintf(buf, sizeof buf, "\"cm\":%d,\"cs\":%d,\"op\":\"%s\",\"fam\":\"%s\",\"hf\":\"%s\",\"sc\":[", mr && m.combatMode ? 1 : 0,
-                          mr && (m.valid & motion::kMvState) ? m.state : -1, opn, fam, hf);
-            line += buf;
-        }
-        bool firstScope = true;
-        for (int i = 0; i < c.n; ++i) {
-            const wo187::ScopeInfo& s = c.sc[i];
-            if (!s.ok || s.empty) continue;   // an empty scope is not listed (the format's rule)
-            char sn[48], an[96];
-            json_escape(s.name, sn, sizeof sn);
-            json_escape(s.action, an, sizeof an);
-            char fnm[96] = "", fne[112] = "";
-            if (wo187::fragment_name(b.eid, s.frag, fnm, sizeof fnm)) json_escape(fnm, fne, sizeof fne);   // WO-210 0.3: the game's own name
-            std::snprintf(buf, sizeof buf, "%s{\"s\":\"%s\",\"c\":\"%s\",\"fr\":%u,\"fn\":\"%s\",\"pr\":%d}", firstScope ? "" : ",", sn, an, s.frag, fne, s.prio);
-            line += buf;
-            firstScope = false;
-        }
-        line += "]}";
-        firstBody = false;
-        ++c_bodies;
-    }
+    for (const Body& b : bodies) if (body_json(b, now, firstBody, line)) firstBody = false;
     line += "]}\n";
-    std::fwrite(line.data(), 1, line.size(), g_file);
+    g_writer.push(std::move(line));   // WO-221 F.1: written, flushed and rotated on the writer's thread
     ++c_lines;
     c_tLine += now_s() - t2;
     if (++c_costSamples, now - g_lastCostLog > 10.0) {
@@ -312,17 +412,39 @@ void probe_tick(double now) {
              static_cast<unsigned long long>(c_costSamples), c_tGather / n * 1e6, c_tScopes / n * 1e6, c_tLine / n * 1e6, bodies.size());
         c_tGather = c_tScopes = c_tLine = 0; c_costSamples = 0; g_lastCostLog = now;
     }
-    g_fileBytes += line.size();
-    if (g_fileBytes > kMaxFileBytes) {   // a long session keeps this file and the one before it (the bundle's size stays bounded)
-        std::fclose(g_file); g_file = nullptr;
-        const std::string prev = g_path.substr(0, g_path.size() - 6) + ".1.jsonl";
-        MoveFileExA(g_path.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING);
-        g_truncated = false;
-        ++c_rotations;
-        return;
-    }
-    if (now - g_lastFlush > 1.0) { std::fflush(g_file); g_lastFlush = now; }
     if (g_scopes.size() > 512) g_scopes.clear();
+}
+
+// ---- WO-215 G (probe_all): the session probe -- the whole session at a low cost. One body a line, 20 lines a second, round-robin over
+// the bodies within the radius (with 30 bodies each one every 1.5 s), into kcdmp-anim-session.jsonl beside the detail file (which keeps
+// its last minutes at 10 Hz for every body, as before). It rotates at 96 MB keeping the one before (hours of a village's rate).
+double g_sLast = 0, g_sListAt = -1e9;
+size_t g_srr = 0;
+std::vector<Body> g_sBodies;
+uint64_t c_sLines = 0;
+constexpr double kSessionEveryS = 0.05;
+
+void session_tick(double now) {
+    if (!g_probe.load(std::memory_order_relaxed) || !wo215::on(wo215rules::kBitProbeAll)) return;
+    if (now - g_sLast < kSessionEveryS) return;
+    g_sLast = now;
+    if (now - g_sListAt >= 1.0) { g_sListAt = now; gather(g_sBodies, now); }
+    if (g_sBodies.empty()) return;
+    const Body b = g_sBodies[g_srr++ % g_sBodies.size()];
+    ScopeCache& c = g_scopes[b.eid];
+    const int n = wo187::read_all_scopes(b.eid, c.sc, kMaxScopesOut);
+    ++c_scopeReads;
+    if (n > 0) { c.n = n; c.at = now; }
+    std::string line;
+    line.reserve(1024);
+    char head[160];
+    std::snprintf(head, sizeof head, "{\"t\":%llu,\"m\":\"%s\",\"f\":%llu,\"s\":1,\"L\":\"%06x\",\"a\":[", static_cast<unsigned long long>(utc_ms()),
+                  machine_name(g_machine), main_thread::frame_count(), launch_id());   // WO-221 F: the row's launch
+    line += head;
+    if (!body_json(b, now, true, line)) return;
+    line += "]}\n";
+    g_sWriter.push(std::move(line));   // WO-221 F.1
+    ++c_sLines;
 }
 
 } // namespace
@@ -331,12 +453,14 @@ void tick() {
     const double now = now_s();
     digest_tick(now);
     probe_tick(now);
+    session_tick(now);   // WO-215 G
 }
 
 void on_pipe_closed() {
     g_armed = false;
     g_probe = false;
-    if (g_file) { std::fflush(g_file); }
+    g_writer.flush_now();
+    g_sWriter.flush_now();   // WO-215 G
 }
 
 uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
@@ -409,7 +533,7 @@ uint8_t handle(uint8_t op, const uint8_t* body, size_t len, uint8_t* out, size_t
             if (len > 5 && body[5] != 255 && body[5] > 0) g_scopeReads = body[5];
             if (on != g_probe.load()) logf("WO206-PROBE %s (machine=%s)", on ? "on" : "off", machine_name(g_machine));
             g_probe = on;
-            if (!on && g_file) std::fflush(g_file);
+            if (!on) g_writer.flush_now();
             out[0] = on ? 1 : 0; put_u32(out + 1, static_cast<uint32_t>(c_lines));
             *outLen = 5;
             return kROk;
@@ -422,11 +546,12 @@ int status_text(char* out, int n) {
     if (!out || n <= 0) return 0;
     const int k = std::snprintf(out, static_cast<size_t>(n),
         "wo206 digest armed=%d paths=%zu passes=%u reads=%llu found=%llu faults=%llu | probe on=%d machine=%s lines=%llu bodies=%llu scope_reads=%llu skipped=%llu"
-        " | memory scope_cache=%zu queue_ages=%zu",   // WO-207 E.1: the probe's own long-lived containers (entries)
+        " rotations=%llu rotate_retries=%llu | memory scope_cache=%zu queue_ages=%zu",   // WO-207 E.1: the probe's own long-lived containers (entries)
         g_armed ? 1 : 0, g_paths.size(), g_sweep.passes, static_cast<unsigned long long>(c_reads), static_cast<unsigned long long>(c_found),
         static_cast<unsigned long long>(c_faults), g_probe.load() ? 1 : 0, machine_name(g_machine), static_cast<unsigned long long>(c_lines),
         static_cast<unsigned long long>(c_bodies), static_cast<unsigned long long>(c_scopeReads), static_cast<unsigned long long>(c_skipped),
-        g_scopes.size(), g_qages.size());
+        static_cast<unsigned long long>(g_writer.rotations.load() + g_sWriter.rotations.load()),
+        static_cast<unsigned long long>(g_writer.rotateRetries.load() + g_sWriter.rotateRetries.load()), g_scopes.size(), g_qages.size());
     return k < 0 ? 0 : (k >= n ? n - 1 : k);
 }
 

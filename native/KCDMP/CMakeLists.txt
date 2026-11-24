@@ -87,6 +87,24 @@ add_library(KCDMP SHARED
     wo210_hit.cpp
     wo211.cpp
     wo212.cpp
+    wo213.cpp
+    wo214.cpp
+    wo215.cpp
+    wo216.cpp
+    wo217.cpp
+    wo217_carts.cpp
+    wo218.cpp
+    wo221.cpp
+    wo222.cpp
+    wo223.cpp
+    blow_ledger.cpp
+    combat_actions.cpp
+    shops.cpp
+    talk_hold.cpp
+    body_order.cpp
+    corpse_look.cpp
+    body_drive.cpp
+    holders.cpp
 )
 
 target_include_directories(KCDMP PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

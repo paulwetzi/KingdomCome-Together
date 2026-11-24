@@ -3,6 +3,7 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 // WO-121 -- movement and combat on native-written bodies. See motion.h.
 #include "motion.h"
+#include "blow_ledger.h"
 #include "wo178.h"
 #include "wo163_rules.h"
 #include "fault_guard.h"
@@ -44,6 +45,8 @@
 #include "wo195.h"
 #include "wo195_rules.h"
 #include "wo201_rules.h"
+#include "wo215.h"
+#include "body_drive.h"
 
 namespace kcdmp::motion {
 namespace {
@@ -616,6 +619,19 @@ void capture(uint8_t cls, void* action) {
     void* ca = as_combat_actor(raw);
     void* playerCa = g_playerCa.load(std::memory_order_relaxed);
     const bool isPlayer = ca && ca == playerCa;
+    // WO-222 A.0 / E (blow_ledger.h): every action of an NPC enters its history (the blow ledger's situations and "what it did next");
+    // a hit reaction also says whether the local player struck it (the hit action's attacker at +0x60). Reads only, no engine call.
+    if (!isPlayer && ca) {
+        void* ow = nullptr;
+        uint32_t oe = 0;
+        if (rd(ca, kCaOwnerEntity, &ow) && ow && rd(ow, kActorEntityId, &oe) && oe) {
+            bool byP = false;
+            void* hc = nullptr;
+            if (cls == kClsHit && playerCa && rd(action, 0x60, &hc) && hc) byP = hc == playerCa || as_combat_actor(hc) == playerCa;
+            kcdmp::blow_ledger::on_npc_action(oe, cls, byP);
+        }
+    }
+    if (isPlayer && cls == kClsHit) kcdmp::blow_ledger::on_player_hit();   // WO-222 E: the player's own hit reaction (an attack it cuts short)
     if (kcdmp::wo178::trace_on()) {   // WO-178 research: the duel trace (read-only)
         uint32_t teid = 0;
         void* towner = nullptr;
@@ -669,6 +685,7 @@ void capture(uint8_t cls, void* action) {
     if (isPlayer) {
         c.eid = 0;
         (cls == kClsAttack ? c_capAttack : c_capOther).fetch_add(1);
+        if (cls == kClsAttack) kcdmp::blow_ledger::on_player_attack(c.type, c.zone, c.ic);   // WO-222 E: the game's own attack action
     } else {
         // WO-131: ca+0x2D8 is the owning C_ACTOR (WO-42 s9.5 round trip), not
         // a CEntity -- engine::entity_name refused it on every NPC swing (the
@@ -1574,7 +1591,8 @@ void body_frame(const char* key, void* ent, uint32_t eid, float renderSpeedMps, 
     if (!b.actor) return;
     const bool fresh = st && stAgeS < 1.5;
     // gait
-    const bool gaitOn = g_gait && (b.avatar ? g_cfgAvatarGait.load() : g_cfgNpcGait.load());
+    // WO-215 A: a routed copy's gait is its own movement system's -- the request's speed class and its own locomotion; ours stays off it
+    const bool gaitOn = g_gait && (b.avatar ? g_cfgAvatarGait.load() : g_cfgNpcGait.load()) && (b.avatar || (!wo215::routed(eid) && !bodydrive::driven(eid)));   // WO-221 C: a driven copy's gait is the engine's
     if (gaitOn) {
         float s = (b.avatar && fresh) ? st->speedCm / 100.0f : renderSpeedMps;
         // A render step faster than any gait (> 9 m/s) is a snap or a teleport,

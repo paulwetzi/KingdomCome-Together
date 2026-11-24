@@ -163,6 +163,7 @@ public partial class GameBridge
                     };
                     foreach (byte j in Wo134Peers())
                         foreach (var b in Wo143Batches(kind, f.Rows)) await Wo143SendAsync(j, kind, b);
+                    if (kind == Protocol.ExtraKindLooks) Wo216NoteHostLooks(f.Rows);   // WO-216 F.1's instrument: what the host's NPCs look at
                     long n = f.Rows.Count;
                     if (kind == Protocol.ExtraKindHands) Interlocked.Add(ref _w143HandRowsOut, n);
                     else if (kind == Protocol.ExtraKindGaits) Interlocked.Add(ref _w143GaitRowsOut, n);
@@ -214,6 +215,12 @@ public partial class GameBridge
     private async Task Wo143OnFrameAsync(byte src, byte[] body)
     {
         if (!ExtraCodec.TryDecode(body, out byte kind, out var rows)) { Console.WriteLine($"MP-W143 malformed extra frame from {src} ({body.Length} bytes)"); return; }
+        await Wo143OnRowsAsync(src, kind, rows);
+    }
+
+    /// <summary>WO-218 A.1: a frame's rows, decoded (the activity lane's batch hands one body's row at a time).</summary>
+    private async Task Wo143OnRowsAsync(byte src, byte kind, IReadOnlyList<ExtraRow> rows)
+    {
         if (!W141Joiner) return;
         _w143HostId = src;
         Interlocked.Add(ref _w143RowsIn, rows.Count);
@@ -222,6 +229,7 @@ public partial class GameBridge
             switch (kind)
             {
                 case Protocol.ExtraKindHands:
+                    if (Wo216Lined(r.Name)) { Interlocked.Increment(ref _w216HandRowsRetired); break; }   // WO-216 C: the line brings its hands
                     _w143HostHands[r.Name] = r;
                     if (W141Active && _w143Hands) await Wo143ApplyHandsAsync(r);
                     await Wo167OnHostHandsAsync(r);   // WO-167 C2: the weapon in the host NPC's hand
@@ -237,6 +245,9 @@ public partial class GameBridge
                 case Protocol.ExtraKindVitals:   // WO-200 II.1: the host's own health and stamina of its NPC
                 case Protocol.ExtraKindMount:    // WO-200 II.2: the host's NPC is on that horse, or on foot
                     await Wo200OnExtraAsync(kind, r);
+                    break;
+                case Protocol.ExtraKindOutfit:   // WO-216 D: the host NPC's worn items
+                    await Wo216OnOutfitAsync(r);
                     break;
                 case Protocol.ExtraKindOneShot:
                     Interlocked.Increment(ref _w143ShotsIn);
@@ -292,6 +303,7 @@ public partial class GameBridge
         string? was = _w143LookNow.GetValueOrDefault(copy);
         if (was == target && _w143LookNow.ContainsKey(copy)) return;
         _w143LookNow[copy] = target;
+        Wo216NoteCopyLook(copy, target);   // WO-216 F.1's instrument
         Interlocked.Increment(ref _w143Looks);
         await ExecLuaAsync($"if KCD2MP_W143Look then KCD2MP_W143Look(\"{EscapeLua(copy)}\", \"{EscapeLua(target ?? "")}\") end");
     }

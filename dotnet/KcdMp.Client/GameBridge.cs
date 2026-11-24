@@ -326,6 +326,7 @@ public partial class GameBridge(ClientConfig config)
     private long _lastLogSeq = -1;
     private ulong _lastNativeFrame;
     private LocalState? _lastNative;
+    private long _w213LastNativeReadMs;   // WO-213 D.4: the last native read (the reads' pace)
     private int _posNativeMisses;
     private bool _posNativeGaveUp;                 // 20 consecutive refusals: DLL too old / hop unmapped
     private bool _posNativeRefusedByOracle;        // the known-answer check failed: native disagrees with the log line
@@ -1503,6 +1504,10 @@ public partial class GameBridge(ClientConfig config)
         byte myId = replyBody[0];
         _myGhostId = myId;
         Console.WriteLine($"Connected! Assigned id={myId} (protocol v{Protocol.Version})");
+        Wo213OnConnect(link);   // WO-213 A: the link's meters; Steam's own config read back
+        Wo214OnConnect();       // WO-214: the mod's own switches
+        Wo215OnConnect();       // WO-215: the mod's own switches
+        Wo213StartWriter(link, stream);   // WO-213 B/C: Steam's limits and lanes, the scheduler, the hello
         Console.WriteLine();
 
         _discordPresence?.SetConnected(config.IsHosting);
@@ -1657,11 +1662,11 @@ public partial class GameBridge(ClientConfig config)
             // Anything under half a hit point is sensor noise, not combat
             // state worth a wire message and a peer-side game-thread apply.
             // WO-210 E.2: a blow the DLL filtered (judge) carries no numbers by design -- the host's engine judges it.
-            if (!judge && Wo147Rules.HitCarriesNothing(health, stamina)) return;
+            if (!judge && Wo147Rules.HitCarriesNothing(health, stamina)) { if (byPlayer) Wo222NoteSend(null, false, "carries-nothing", health, stamina); return; }
             // WO-147: on a joiner only this player's own blows go to the host (the sampler reports any drop
             // near the player: the field's host avatar hit a hidden local copy and the gate took it for the
             // joiner's). And a blow that cost only stamina now goes too (a block, a broken weapon).
-            if (Wo147DropNotOwnBlow(byPlayer, health, stamina)) return;
+            if (Wo147DropNotOwnBlow(byPlayer, health, stamina)) { if (byPlayer) Wo222NoteSend(null, false, "not-own-blow", health, stamina); return; }
             try
             {
                 // WO-40 Phase 5: per-save guids are unreliable across
@@ -1695,6 +1700,7 @@ public partial class GameBridge(ClientConfig config)
                 if (NpcDamageGuard.IsDrop(verdict))
                 {
                     _stats.DmgOutDropped++;
+                    if (byPlayer) Wo222NoteSend(npcName, false, "guard-" + NpcDamageGuard.Reason(verdict), health, stamina);
                     Console.WriteLine(FormattableString.Invariant(
                         $"MP-DMG dir=drop npc={npcName ?? "?"} hp={health:F1} st={stamina:F1} fatal={(died ? 1 : 0)} reason={NpcDamageGuard.Reason(verdict)} authority={(_isDamageAuthority ? 1 : 0)}"));
                     return;
@@ -1705,11 +1711,12 @@ public partial class GameBridge(ClientConfig config)
                     // WO-131 1b/1c: on a joiner, only a hit on the host's NPC where
                     // the host has it goes out, and never as a kill.
                     var (w131Send, w131Health, w131Fatal) = await Wo131GateOutboundAsync(soul, npcName, health, died, judge);
-                    if (!w131Send) { _stats.DmgOutDropped++; return; }
+                    if (!w131Send) { _stats.DmgOutDropped++; if (byPlayer) Wo222NoteSend(npcName, false, "not-the-hosts-npc-here", health, stamina); return; }
                     health = w131Health; died = w131Fatal;
                     await SendNpcDamageAsync(stream, npcName, stamina, health, suppressHitReaction: true, fatal: died,
                                              attributed: byPlayer && _npcAttribution, judgeThere: judge);   // WO-121 Phase 5; WO-210 E.2
                     if (byPlayer && _npcAttribution) _w121AttribOut++;
+                    if (byPlayer) Wo222NoteSend(npcName, true, "sent", health, stamina);
                     Console.WriteLine($"[combat] sent hit {health:F1} on '{npcName}' ({soul}){(died ? " FATAL" : "")}{(judge ? " (not judged here: the host's engine decides)" : "")}");
                     NoteRequestResolvedOut(npcName);   // WO-102 Phase 5
                     _stats.DmgOut++; if (died) _stats.DmgOutFatal++;
@@ -1839,6 +1846,12 @@ public partial class GameBridge(ClientConfig config)
         Wo140OnConnect(cts.Token);           // WO-140: sleeping together, the own-world trap
         Wo141OnConnect(cts.Token);           // WO-141: activities (NPCs and players, the game's own state)
         Wo143OnConnect(cts.Token);           // WO-143: hands, gaits, one-shots, looks, the players' minigames on the avatars
+        Wo216OnConnect(cts.Token);           // WO-216: the switches, the host's route lines (A)
+        Wo217OnConnect(cts.Token);           // WO-217: the switches
+        Wo218OnConnect(cts.Token);           // WO-218: the switches, the batch's probe
+        Wo221OnConnect(cts.Token);           // WO-221: the switches
+        Wo222OnConnect(cts.Token);           // WO-222: the switches
+        Wo223OnConnect(cts.Token);           // WO-223: the switches
         Wo147OnConnect(cts.Token);           // WO-147: the joiner fights hostile copies, destructive quest steps checked, the leash's stats
         Wo148OnConnect(cts.Token);           // WO-148: carrying on the other screen (the carrier owns the body; the host's world decides)
         Wo154MenuOnConnect(cts.Token);       // WO-154 7b: the mod menu (the saved choices, the host's levers, fast travel)
@@ -2292,8 +2305,7 @@ public partial class GameBridge(ClientConfig config)
                         if (nat is null) local = await ReadLocalBodyStateAsync(cts.Token);   // log path: the separate 0x09 read, as before
                         _w211LastOwnPos = (x, y, z, rotZ);   // WO-211 A.2.3: where this player stood at a drop
                         await SendPositionAsync(stream, x, y, z, rotZ, riding,
-                                                state2: Wo121State2For(natState2, nowTimestamp, consume: true, out _),
-                                captureMs: nat is null ? null : _combat.LastCaptureMs);
+                                                state2: Wo121State2For(natState2, nowTimestamp, consume: true, out _));
                         // WO-100.5 Phase 3: the accepted input rides the same
                         // read -- one pipe round trip serves both channels.
                         if (local is LocalBodyState lb)
@@ -2323,6 +2335,8 @@ public partial class GameBridge(ClientConfig config)
         finally
         {
             try { PrintSessionSummary("disconnect"); } catch { }   // WO-98 Phase 6
+            try { Wo213OnDisconnect(); } catch { }                 // WO-213 A.1: the connection's per-kind totals
+            Wo213StopWriter();                                     // WO-213 C
             // WO-211 A.1: a joiner in the host's world whose link dropped (not the agent stopping) holds there while it reconnects --
             // decided before the per-WO teardowns below, which read it (the save lock stays, the leave does not run, the host stays shown)
             if (!appCt.IsCancellationRequested) { try { await Wo211TryHoldAsync("relay-lost"); } catch (Exception ex) { Console.WriteLine($"WO211-LINK hold failed: {ex.Message}"); } }
@@ -2887,7 +2901,7 @@ public partial class GameBridge(ClientConfig config)
         var known = _ghostKnownItemClasses.GetOrAdd(ghostId, static _ => []);
         var applied = _ghostAppearance.GetOrAdd(ghostId, static _ => []);
         var unwearable = _ghostUnwearable.GetOrAdd(ghostId, static _ => new Wo135Rules.Unwearable());
-        var targetSet = Wo144WithoutLights(target);   // WO-144 2.4: lights are the torch sync's, never an outfit piece
+        var targetSet = Wo214KeepHeld(ghostId, Wo144WithoutLights(target));   // WO-144 2.4: lights are the torch sync's, never an outfit piece; WO-214 F: the weapon in the partner's hand stays
         lock (unwearable) unwearable.OnTarget(targetSet);
         // What the peer wears (the swing catalog resolves its weapon from this).
         lock (applied) { applied.Clear(); applied.UnionWith(targetSet); }
@@ -3872,6 +3886,9 @@ public partial class GameBridge(ClientConfig config)
         }
         await Wo195OnCopyDeathAsync(npcName, via);   // WO-195 1: every fight hold goes first (the engagement, the guard hold, the wish and its pin)
         await Wo131BeforeDeathAsync(npcName);   // WO-131 1c: the copy guard comes off for the host's death
+        // WO-221 A: the DLL has just ended the body's recorded actions (the release above); its controller drops them at its next
+        // update -- the death, which takes the body's combat part apart, comes 200 ms later
+        if (W221On("combat_action_end")) await Task.Delay(200, ct);
         bool applied = false;
         try { applied = await _combat.ApplyDeathAsync(lg, ct); }
         catch (Exception ex) { Console.WriteLine($"[npcdeath] ApplyDeath threw for '{npcName}': {ex.Message}"); }
@@ -4657,10 +4674,24 @@ public partial class GameBridge(ClientConfig config)
                 var payload    = new byte[payloadLen];
                 await ReadExactAsync(stream, payload, ct);
                 long arrival   = Stopwatch.GetTimestamp();
+                int wireBytes  = payloadLen + 3;
+                if (type == Protocol.NpcStateQDown)   // WO-213 D.3: the relay's compact NPC state, back to the 0x27 payload everything below reads
+                {
+                    if (Wo213Expand(payload) is not { } full) { Wo213NoteIn(type, payload, arrival, wireBytes); continue; }
+                    type = Protocol.NpcStateDown; payload = full;
+                }
+                Wo213NoteIn(type, payload, arrival, wireBytes);   // WO-213 A.1/A.5: at the socket, before any queue of this agent
                 Wo138NoteArrival(type, payload);   // WO-138: the source's link is alive (the joiner's hold)
                 Wo147NotePositionAtRead(type, payload, arrival);   // WO-147: the leash's positions, stamped as they arrive
                 Wo147NoteNpcAtRead(type, payload, arrival);        // the backlog fix: the newest sample of each NPC/avatar, as read
+                Wo218NoteAtRead(type, payload, arrival);           // WO-218 A.2: each body's newest NPC state, as read (the shed's "superseded")
                 Volatile.Write(ref _w202LastReadMs, W147StampMs(arrival));   // WO-202 III.2: the queue's lag is measured against this
+                if (Wo213TakeAtRead(type, payload)) continue;   // WO-213: the relay's answer to the hello
+                if (_w213Repeats is { } rf)   // WO-213 C.2: a relay repeat of a posture / opponent already applied here goes no further
+                {
+                    if (rf.Filter(type, payload, Environment.TickCount64) is not { } kept) continue;
+                    payload = kept;
+                }
                 if (W202("ping_network") && Wo202TakeAtRead(type, payload)) continue;   // WO-202 III.2: the network's answers, never behind the queue
                 if (Wo206TakeAtRead(type, payload)) continue;   // WO-206 E: an epoch is known from the frame it arrives in, never behind the queue
                 uint stamp = Wo206StampAtRead(payload);         // WO-206 E: the world epoch this frame was sent under
@@ -4864,7 +4895,9 @@ public partial class GameBridge(ClientConfig config)
                         _ghostLastYaw[ghostId] = rotZ;
                         _voice?.UpdateGhostPos(ghostId, x, y, z);
                         // The backlog fix: behind, a sample a newer one supersedes (no state block of its own) is not pushed.
-                        if (!Wo147GhostSkip(ghostId, frame.Arrival, gs.State2 is not null))
+                        // WO-213 D.4: the DLL drives the figure from every sample (30-45 a second while it moves); the game's Lua update at the
+                        // old pace -- one Lua call a sample crowded the joiner's console (a joined talk's join request waited 67 s)
+                        if (!Wo147GhostSkip(ghostId, frame.Arrival, gs.State2 is not null) && Wo213GhostLuaDue(ghostId, isRiding, gs.State2 is not null))
                             await UpdateGhostAsync(ghostId.ToString(), x, y, z, rotZ, isRiding, body);
                     }
                     else if (type == Protocol.ActionDown)
@@ -5580,6 +5613,11 @@ public partial class GameBridge(ClientConfig config)
                         // Lua side still gets a call for the one-shot locomotion
                         // hold; everything else (draw/sheathe/block, or a swing
                         // with no native path available) stays on the old call.
+                        if (ceEvent == Protocol.CombatEventWeaponDrawn)
+                        {
+                            await Wo214TestStripAsync(ceSource);   // WO-214 F: the bench's fault only
+                            await Wo214PreDrawAsync(ceSource, ct);   // WO-214 F: the weapon he last held is on his figure before its draw
+                        }
                         if (ceEvent == Protocol.CombatEventSwing
                             && _ghostEntityIds.TryGetValue(ceSource.ToString(), out uint ceEntityId))
                         {
@@ -6068,11 +6106,8 @@ public partial class GameBridge(ClientConfig config)
             case "w212_crime":       // WO-212: clear | off | on (this player's crimes)
                 _ = Wo212OnCrimeAsync(arg);
                 return;
-            case "w214_horse":       // WO-214: <x> <y> <z> <rot> here|ridden|gone (this player's called horse)
-                _ = Wo214OnHorseAsync(arg);
-                return;
-            case "w212_shop":        // WO-212: <keeper> <mode> <shop entity hex>
-                _ = Wo212OnShopAsync(arg);
+            case "fs_horse":         // fixed-soul horse: <x> <y> <z> <rot> here|ridden|gone (this player's called horse)
+                _ = FsHorseOnEventAsync(arg);
                 return;
             case "w151_door":        // WO-151 3.9: a door of the host's world changed / this joiner used one
                 _ = Wo151OnDoorLocalAsync(arg);
@@ -6299,6 +6334,33 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case string w211 when w211.StartsWith("w211_", StringComparison.Ordinal):   // WO-211: the switches, the hold's Leave, the flight, the status
                 Wo211OnEvent(name, arg);
+                return;
+            case string w213 when w213.StartsWith("w213_", StringComparison.Ordinal):   // WO-213: the switches and the status
+                Wo213OnEvent(name, arg);
+                return;
+            case string w214 when w214.StartsWith("w214_", StringComparison.Ordinal):   // WO-214: the switches, the status, F's hands
+                Wo214OnEvent(name, arg);
+                return;
+            case string w215 when w215.StartsWith("w215_", StringComparison.Ordinal):   // WO-215: the switches, the status, A.0's probe and tuning
+                Wo215OnEvent(name, arg);
+                return;
+            case string w216 when w216.StartsWith("w216_", StringComparison.Ordinal):   // WO-216: the switches and the status
+                Wo216OnEvent(name, arg);
+                return;
+            case string w218 when w218.StartsWith("w218_", StringComparison.Ordinal):   // WO-218: the switches, the status, its parts' events
+                Wo218OnEvent(name, arg);
+                return;
+            case string w222 when w222.StartsWith("w222_", StringComparison.Ordinal):   // WO-222: the switches, the status
+                Wo222OnEvent(name, arg);
+                return;
+            case string w223 when w223.StartsWith("w223_", StringComparison.Ordinal):   // WO-223: the switches, the status, the attend sets
+                Wo223OnEvent(name, arg);
+                return;
+            case string w221 when w221.StartsWith("w221_", StringComparison.Ordinal):   // WO-221: the switches, the status, its parts' events
+                Wo221OnEvent(name, arg);
+                return;
+            case string w217 when w217.StartsWith("w217_", StringComparison.Ordinal):   // WO-217: the switches, the status, its parts' events
+                Wo217OnEvent(name, arg);
                 return;
             case "w206_cfg":         // WO-206 E: mp_epoch_check, mp_research_death_from_health
             case "w206_status":      // WO-206 E: mp_w206_status
@@ -7270,7 +7332,7 @@ public partial class GameBridge(ClientConfig config)
                 $"if KCD2MP_NpcNativeAlive then KCD2MP_NpcNativeAlive({(s.Armed ? 1 : 0)}, {(s.NativeOn ? 1 : 0)}, {s.Bound}, {s.Writing}) end"));
             if ((++_nativeHeartbeats % 10) == 0)
                 Console.WriteLine(FormattableString.Invariant(
-                    $"MP-NPCWRITE-STATUS armed={(s.Armed ? 1 : 0)} on={(s.NativeOn ? 1 : 0)} bound={s.Bound} writing={s.Writing} frames={s.FramesWritten} writes={s.Writes} drops={s.Drops} samples={s.Samples} feed_enqueued={Interlocked.Read(ref _nativeFeed.Enqueued)} feed_sent={Interlocked.Read(ref _nativeFeed.Sent)} feed_batches={Interlocked.Read(ref _nativeFeed.Batches)} feed_failed={Interlocked.Read(ref _nativeFeed.FailedBatches)} binds_ok={Interlocked.Read(ref _nativeBindsOk)} binds_refused={Interlocked.Read(ref _nativeBindsRefused)} dll_drops_seen={Interlocked.Read(ref _nativeDrops)} holds={Interlocked.Read(ref _nativeHolds)} lua_bound={_nativeBound.Count} lua_pushed={_npcLua.Pushed} lua_coalesced={_npcLua.Coalesced}"));
+                    $"MP-NPCWRITE-STATUS armed={(s.Armed ? 1 : 0)} on={(s.NativeOn ? 1 : 0)} bound={s.Bound} writing={s.Writing} frames={s.FramesWritten} writes={s.Writes} drops={s.Drops} samples={s.Samples} feed_enqueued={Interlocked.Read(ref _nativeFeed.Enqueued)} feed_sent={Interlocked.Read(ref _nativeFeed.Sent)} feed_batches={Interlocked.Read(ref _nativeFeed.Batches)} feed_failed={Interlocked.Read(ref _nativeFeed.FailedBatches)} feed_coalesced={Interlocked.Read(ref _nativeFeed.Coalesced)} binds_ok={Interlocked.Read(ref _nativeBindsOk)} binds_refused={Interlocked.Read(ref _nativeBindsRefused)} dll_drops_seen={Interlocked.Read(ref _nativeDrops)} holds={Interlocked.Read(ref _nativeHolds)} lua_bound={_nativeBound.Count} lua_pushed={_npcLua.Pushed} lua_coalesced={_npcLua.Coalesced}"));
         }
         catch { }
         finally { Interlocked.Exchange(ref _nativeHeartbeatBusy, 0); }
@@ -7455,10 +7517,17 @@ public partial class GameBridge(ClientConfig config)
             Console.WriteLine("MP-POSNATIVE re-armed after 60 s -- the native read is checked against the log line again");
         }
         if (_posNativeGaveUp || _posNativeRefusedByOracle) return null;
+        // WO-213 D.4: the top band is 30 Hz -- the read at most every 25 ms (the loop goes round every ~16 ms; each read is a pipe call)
+        bool band = W213On("figure_band");
+        long nowMs = Environment.TickCount64;
+        if (band && _lastNative is LocalState recent && nowMs - _w213LastNativeReadMs < W213Rules.FigureReadEveryMs) return recent;
+        _w213LastNativeReadMs = nowMs;
         LocalState? r = null;
+        CombatPipe.Priority.Value = band;   // WO-213 D.4: first at the pipe's gate (this method's own flow only)
         try { r = await _combat.ReadLocalStateAsync(ct); }
         catch (OperationCanceledException) { throw; }
         catch { }
+        finally { CombatPipe.Priority.Value = false; }
         if (r is not LocalState ls)
         {
             if (++_posNativeMisses == PosNativeGiveUpAfter)
@@ -7841,9 +7910,16 @@ public partial class GameBridge(ClientConfig config)
 
     private async Task WritePacketAsync(Stream stream, byte[] packet, CancellationToken ct = default)
     {
+        if (Wo213TryQueue(stream, packet)) return;   // WO-213 C: the scheduler is this link's writer (it counts what it sends)
+        long t0 = Stopwatch.GetTimestamp();
         await _tcpWriteLock.WaitAsync(ct);
+        long t1 = Stopwatch.GetTimestamp();
         try { await stream.WriteAsync(packet, ct); }
-        finally { _tcpWriteLock.Release(); }
+        finally
+        {
+            _tcpWriteLock.Release();
+            Wo213NoteOut(packet, Stopwatch.GetElapsedTime(t0, t1).TotalMilliseconds, Stopwatch.GetElapsedTime(t1).TotalMilliseconds);   // WO-213 A.1/A.2
+        }
     }
 
     private static bool IntervalElapsed(ref long lastTimestamp, TimeSpan interval, long nowTimestamp)
@@ -7870,11 +7946,11 @@ public partial class GameBridge(ClientConfig config)
         }
     }
 
+    // WO-213 D.4 (mp_figure_band): the figure in the top band -- the NPC sender's own 1.5 cm gate, so a walking player goes out every round
+    // of the loop; off (the twin): 5 cm, which a walk crossed every second round (the bench's walk: one send per 52 ms, 10 cm apart)
+    // WO-214 A.4 (figure_turn): a turn of the figure counts as a change (WO-213 D.4 made it 0.01 rad); the twin ignores the turn
     private bool HasChanged(float x, float y, float z, float rotZ) =>
-        Math.Abs(x - _lastX)       > PosThreshold ||
-        Math.Abs(y - _lastY)       > PosThreshold ||
-        Math.Abs(z - _lastZ)       > PosThreshold ||
-        Math.Abs(rotZ - _lastRotZ) > RotThreshold;
+        W213Rules.FigureChanged(x - _lastX, y - _lastY, z - _lastZ, W214On("figure_turn") ? rotZ - _lastRotZ : 0f, W213On("figure_band"), PosThreshold, RotThreshold);
 
     // -------------------------------------------------------------------------
     // Source-generated regexes

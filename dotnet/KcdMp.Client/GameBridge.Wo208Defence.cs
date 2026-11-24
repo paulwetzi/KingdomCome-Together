@@ -56,6 +56,7 @@ public partial class GameBridge
             return;
         }
         if (Wo208Rules.IsJudgement(outcome)) _w208JudgedAt[npc] = Environment.TickCount64;   // none: the host's verdict is applied here as before
+        if (Wo208Rules.IsJudgement(outcome)) Wo222OwnJudgement(npc, outcome);   // WO-222 C: a host guess applied a moment ago is given back
         else _w209NoneAt[npc] = Environment.TickCount64;   // WO-209 B: a host verdict waiting for this window goes now
         uint seq = Interlocked.Increment(ref _w208DefSeq);
         Interlocked.Increment(ref _w208DefOut);
@@ -97,6 +98,7 @@ public partial class GameBridge
             list.Add(new W208Outcome { At = now, Outcome = outcome, Hp = hp, St = st, Seq = seq });
         }
         Console.WriteLine(FormattableString.Invariant($"WO208-DEF in npc={npc} joiner={src} outcome={Wo208Rules.DefName(outcome)} hp={hp:F1} st={st:F1} seq={seq}"));
+        Wo222NoteLateAnswer(src, npc, outcome, now);   // WO-222 C: a verdict of his that came after the host's guess went
     }
 
     /// <summary>
@@ -114,27 +116,81 @@ public partial class GameBridge
         // wait only; an answered one (hit, block, parry, "none") is applied at once as before.
         long lastBlow = _w210LastBlow.TryGetValue((ghost, attacker), out long lb) ? lb : 0;
         _w210LastBlow[(ghost, attacker)] = blow;
-        if (W210("combo_hold") && Wo210Rules.ComboContinues(lastBlow, blow)) { hold = Wo210Rules.ComboHoldMs(rtt); Interlocked.Increment(ref _w210ComboHolds); }
-        while (true)
+        bool combo = W210("combo_hold") && Wo210Rules.ComboContinues(lastBlow, blow);
+        if (combo) { hold = Wo210Rules.ComboHoldMs(rtt); Interlocked.Increment(ref _w210ComboHolds); }
+        // WO-222 C (def_wait): the wait follows how long this joiner's own verdicts take to come in (the slowest of his last answers, late
+        // ones included, and a margin); the twin keeps WO-208's fixed wait
+        bool w222 = W222On("def_wait");
+        var ring = _w222DefDelays.GetOrAdd(ghost, _ => new Wo222Rules.DelayRing());
+        // WO-223 C (w223_copy_target): while this joiner answers nearly every blow, the wait may cover an answer a stall late
+        var tally = _w223Answers.GetOrAdd(ghost, _ => new Wo223Rules.AnswerTally());
+        var (answered, known) = tally.Read();
+        int cap = W223On("w223_copy_target") ? Wo223Rules.DefCapMs(answered, known, Wo222Rules.DefHoldCapMs) : Wo222Rules.DefHoldCapMs;
+        if (w222) hold = Wo222Rules.DefHoldMs(ring.Snapshot(), combo ? Wo210Rules.ComboHoldMs(rtt) : 0, cap);
+        // WO-223 C (w223_copy_target): the oldest blow of this attacker still waiting takes an answer first, and a "nothing landed"
+        // answers only a blow that came before it (Wo223Rules.OldestFirst / NoneAnswers)
+        bool order = W223On("w223_copy_target");
+        var waiting = _w223Waiting.GetOrAdd((ghost, attacker), _ => new List<long>());
+        if (order) lock (waiting) waiting.Add(blow);
+        bool kept = false, noneEarly = false, noneGrace = false;   // what the two rules did for this blow (counted once, below)
+        try
         {
-            if (_w208Outcomes.TryGetValue((ghost, attacker), out var list))
+            while (true)
             {
-                lock (list)
+                if (_w208Outcomes.TryGetValue((ghost, attacker), out var list))
                 {
-                    // a judgement first; none (the joiner's window closed with nothing landed) only when no judgement answers: the host's
-                    // own verdict then, at once (no hold to the cap)
-                    var o = list.FirstOrDefault(x => !x.Used && Wo208Rules.IsJudgement(x.Outcome) && Wo208Rules.Answers(x.At, blow, hold))
-                            ?? list.FirstOrDefault(x => !x.Used && Wo208Rules.Answers(x.At, blow, hold));
-                    if (o is not null)
+                    lock (list)
                     {
-                        o.Used = true;
-                        return (Wo208Rules.IsJudgement(o.Outcome), o.Outcome, o.Hp, o.St, Environment.TickCount64 - blow);
+                        long[] older;
+                        lock (waiting) older = order ? waiting.Where(b => b < blow).ToArray() : Array.Empty<long>();
+                        long nowM = Environment.TickCount64;
+                        bool Mine(W208Outcome x)
+                        {
+                            if (!order || Wo223Rules.OldestFirst(x.At, blow, older, Wo208Rules.OutcomeEarlyMs)) return true;
+                            kept = true;
+                            return false;
+                        }
+                        bool None(W208Outcome x)
+                        {
+                            if (!order || Wo223Rules.NoneAnswers(x.At, blow, nowM)) return true;
+                            if (x.At < blow) noneEarly = true; else noneGrace = true;
+                            return false;
+                        }
+                        // a judgement first; none (the joiner's window closed with nothing landed) only when no judgement answers: the host's
+                        // own verdict then, at once (no hold to the cap)
+                        var o = list.FirstOrDefault(x => !x.Used && Wo208Rules.IsJudgement(x.Outcome) && Wo208Rules.Answers(x.At, blow, hold) && Mine(x))
+                                ?? list.FirstOrDefault(x => !x.Used && !Wo208Rules.IsJudgement(x.Outcome) && Wo208Rules.Answers(x.At, blow, hold) && Mine(x) && None(x));
+                        if (o is not null)
+                        {
+                            o.Used = true;
+                            if (Wo208Rules.IsJudgement(o.Outcome) && Wo222Rules.DelaySample(o.At, blow)) ring.Add((int)(o.At - blow));
+                            tally.Add(true);   // an answer (a judgement, or "none": his window closed with nothing landed)
+                            return (Wo208Rules.IsJudgement(o.Outcome), o.Outcome, o.Hp, o.St, Environment.TickCount64 - blow);
+                        }
                     }
                 }
+                long now2 = Environment.TickCount64;
+                long waited = now2 - blow;
+                if (waited >= hold)
+                {
+                    tally.Add(false);
+                    if (w222)
+                    {
+                        Interlocked.Increment(ref _w222DefFallbacks);
+                        Wo222NoteFallback(ghost, attacker, blow);
+                        Console.WriteLine(FormattableString.Invariant($"W222-DEF fallback npc={attacker} joiner={ghost} hold_ms={hold} waited_ms={waited} samples={ring.Snapshot().Length} answered={answered}/{known} cap_ms={cap}"));
+                    }
+                    return (false, 0, 0, 0, waited);
+                }
+                await Task.Delay(15);
             }
-            long waited = Environment.TickCount64 - blow;
-            if (waited >= hold) return (false, 0, 0, 0, waited);
-            await Task.Delay(15);
+        }
+        finally
+        {
+            if (order) lock (waiting) waiting.Remove(blow);
+            if (kept) Interlocked.Increment(ref _w223OrderKept);
+            if (noneEarly) Interlocked.Increment(ref _w223NoneEarly);
+            if (noneGrace) Interlocked.Increment(ref _w223NoneGrace);
         }
     }
 

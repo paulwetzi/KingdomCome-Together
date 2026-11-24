@@ -46,6 +46,8 @@ namespace KcdMp.Wire;
 //  10 DigestCheckpoint host -> joiner  WO-206 C: take this checkpoint's digest (ProtocolWo206.cs)
 //  11 Epoch           either           WO-206 E: "v1|world|join|why" -- the host's world and join epochs (to every partner on each
 //                                      bump and every 10 s); a joiner answers each with why = "ack" (the world epoch it now knows)
+//  12 FigureHand      either           WO-214 F: "v1|drawn|class" -- this player's own main-hand item class at each draw, sheathe and
+//                                      change (every 10 s while drawn); the partner's figure is made to hold it (ProtocolWo214.cs)
 //
 // II.5 -- the relay passes every message type. RelayUp is THE list of the client -> relay types that are NOT join rows, each with
 // the payload lengths the relay takes; JoinWire is the rest. IsKnownUp / IsUpLenOk answer for both (plus the Handshake, the first
@@ -88,13 +90,16 @@ public static partial class Protocol
     public const byte W203DefenceSwing = 1, W203DefenceOutcome = 2, W203GuardState = 3, W203EngageEarly = 4, W203NpcWorn = 5,
                       W203NpcPose = 6, W203JoinProgress = 7, W203FocusEdge = 8, W203TravelRoute = 9,
                       W203DigestCheckpoint = 10,   // WO-206 C (ProtocolWo206.cs)
-                      W203Epoch = 11;   // WO-206 E
+                      W203Epoch = 11,   // WO-206 E
+                      W203FigureHand = 12,   // WO-214 F (ProtocolWo214.cs)
+                      W203Stealth = 13;   // WO-223 B (ProtocolWo223.cs)
 
     public static string W203KindName(byte k) => k switch
     {
         W203DefenceSwing => "defence-swing", W203DefenceOutcome => "defence-outcome", W203GuardState => "guard-state",
         W203EngageEarly => "engage-early", W203NpcWorn => "npc-worn", W203NpcPose => "npc-pose", W203JoinProgress => "join-progress",
         W203FocusEdge => "focus-edge", W203TravelRoute => "travel-route", W203DigestCheckpoint => "digest-checkpoint", W203Epoch => "epoch",
+        W203FigureHand => "figure-hand", W203Stealth => "stealth",
         _ => $"unknown-{k}",
     };
 
@@ -150,6 +155,7 @@ public static partial class Protocol
         (GraveRemoveUp,     "grave-remove",      GraveRemoveUpPayloadLen, GraveRemoveUpPayloadLen),
         (PlayerHitV8Up,     "player-hit-v8",     PlayerHitV8.UpLen, PlayerHitV8.UpLen),
         (WorldSavedUp,      "world-saved",       WorldSavedUpPayloadLen, WorldSavedUpPayloadLen),   // the damage authority only
+        (LinkHelloUp,       "link-hello",        LinkHelloUpLen, LinkHelloUpLen),               // WO-213: relay-local, never forwarded
     };
 
     /// <summary>The RelayUp row for an up type, or null (a join row, the Handshake, or not an up type).</summary>
@@ -170,6 +176,7 @@ public static partial class Protocol
         PlayerHitDown, PlayerDeathDown, CombatRole, NpcStateDown, TimeSkipDown, HorseInfoDown, CombatEventDown, WeatherDown,
         NpcDamageDown, ItemDropDown, ItemClaimDown, ServerFull, StoryBeatDown, ClockSyncDown, ActionDown, ReleaseVersionMismatch,
         PlayerRespawnedDown, GraveAddDown, GraveRemoveDown, PlayerHitV8Down, WorldSavedDown, Ack,
+        LinkHelloDown, NpcStateQDown,   // WO-213
     };
 
     // One lookup per type byte, built on first use (not in a field initializer: JoinWire lives in another part of this partial

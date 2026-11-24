@@ -143,6 +143,7 @@ void tick();
 
 // ---- shared helpers for npc_trace.cpp (main thread) --------------------------
 double now_s();                                    // QPC seconds
+bool   write_entity_tm(void* e, const float pos[3], const float q[4]);   // WO-217 F: IEntity::SetPosRotScale (its scale kept), guarded
 bool   entity_pos(void* e, float out[3]);          // world translation, SEH-guarded
 float  entity_yaw(void* e);                        // WO-155: the body's yaw (atan2 of the world matrix's x axis); forward = (-sin, cos)
 void*  entity_by_name(const char* name);           // one full walk; null when absent
@@ -175,5 +176,9 @@ bool is_bound_eid(uint32_t eid);
 // the newest sample's stream flags (bit 0 dead).
 struct HitCheck { bool bound = false; double ageS = -1; float distM = -1; uint8_t flags = 0; uint32_t eid = 0; };
 bool hit_check(const char* name, HitCheck* out);
+
+// WO-213 E.1: the play-out delay this copy's position is rendered at now (s), or -1 when it is not written by this writer -- the owner
+// (wo208.cpp) applies the host's animation states the same delay after they arrive, so the actions start where the position is.
+double playout_delay_s(uint32_t eid);
 
 } // namespace kcdmp::npcdrive

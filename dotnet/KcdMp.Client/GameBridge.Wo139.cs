@@ -465,7 +465,7 @@ public partial class GameBridge
                     return;
                 }
                 case Protocol.CrimeAskHorse:
-                    await Wo214HostOnAskAsync(src, m.Text);
+                    await FsHorseHostOnAskAsync(src, m.Text);
                     return;
                 case Protocol.CrimeAskClear:
                     await Wo212HostOnAskAsync(src, m.Text);
@@ -516,6 +516,19 @@ public partial class GameBridge
                         await ExecLuaAsync($"if KCD2MP_W139LegalHorses then KCD2MP_W139LegalHorses(\"{csv}\") end");
                     }
                     return;
+                case Protocol.CrimeHostBagBase:   // WO-221 D.4
+                case Protocol.CrimeHostBagTake:
+                    Wo221OnBagText(m.Kind, m.Text);
+                    return;
+                case Protocol.CrimeHostCorpseLooks:   // WO-221 E.1
+                    Wo221OnCorpseLooksText(m.Text);
+                    return;
+                case Protocol.CrimeHostHorseOwners:   // WO-221 D
+                    Wo221OnHorseOwnersText(m.Text);
+                    return;
+                case Protocol.CrimeHostKeepers:   // WO-221 B
+                    Wo221OnKeepersText(m.Text);
+                    return;
                 case Protocol.CrimeHostShops when Wo139Rules.TryParseHorses(m.Text, out int spart, out int snparts, out var keepers):
                     if (spart == 1) _w139ShopParts.Clear();
                     _w139ShopParts.AddRange(keepers);
@@ -530,8 +543,8 @@ public partial class GameBridge
                     Wo211CrimesCleared();
                     await ExecLuaAsync($"if KCD2MP_W139Cleared then KCD2MP_W139Cleared(\"{why}\") end");
                     return;
-                case Protocol.CrimeHostPeerHorse when m.Tok <= byte.MaxValue && Wo214Horse.TryParse(m.Text, out var peerHorse):
-                    await Wo214ShowAsync((byte)m.Tok, peerHorse);
+                case Protocol.CrimeHostPeerHorse when m.Tok <= byte.MaxValue && FsHorse.TryParse(m.Text, out var peerHorse):
+                    await FsHorseShowAsync((byte)m.Tok, peerHorse);
                     return;
                 case Protocol.CrimeHostMode when Wo139Rules.TryParseMode(m.Text, out bool mon, out string mwhy):
                     if (!_w139HostModeKnown || mon != _w139HostModeOn) Console.WriteLine($"MP-W139 joiner: the host's crime sharing is {(mon ? "ON" : "OFF")} ({mwhy})");

@@ -179,6 +179,9 @@ local function world()
     w.pendingOpen = {}; w.sessions = {}; w.partial = {}; w.stash = {}; w.itemReq = {}; w.hostTaken = {}; w.hostVerify = {}
     w.bodySig = {}; w.chestSess = {}
     w.bodies, w.items, w.chests = true, true, true
+    -- WO-217: this suite is WO-134's own loot -- the path with mp_loot_live and mp_item_flags off (WO-217's live loot:
+    -- Test-WO217Synthetic)
+    if KCD2MP_W217Cfg then KCD2MP_W217Cfg("loot_live=off,item_flags=off") end
     local L = KCD2MP.w166.loot
     L.openOn = nil; L.deferred = {}; L.takebacks = {}
     TOASTS = {}; LOOTS = {}; TIMERS = {}
@@ -366,6 +369,7 @@ do
     local before = ORIG_TALKS
     local mark = #LOG
     BasicAIActions.OnTalk(ENTS["ttac_blacksmith"], player, 1)
+    if KCD2MP_W221TalkHeld then KCD2MP_W221TalkHeld("ttac_blacksmith", "held") end   -- WO-221 B: the DLL's hold ack (the copy is woken on it)
     check("R1: a press on a paused copy resumes it first", cmdCount("wh_ai_ResumeNPC ttac_blacksmith") == 1 and KCD2MP.w137.talking["ttac_blacksmith"] ~= nil
         and lastLog("WO166-TALK resume-first npc=ttac_blacksmith", mark) ~= nil)
     check("R2: ... and the press is not passed on in the same frame", ORIG_TALKS == before)

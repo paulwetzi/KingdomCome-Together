@@ -47,6 +47,8 @@ if (-not $ModDir) {
 $Targets = @(
     @{ Key = 'APP|KcdMpClient.dll';            Path = Join-Path $InstallDir 'KcdMpClient.dll';            From = 'KcdMpClient.dll' },
     @{ Key = 'APP|KcdMp.Protocol.dll';         Path = Join-Path $InstallDir 'KcdMp.Protocol.dll';         From = 'KcdMp.Protocol.dll' },
+    @{ Key = 'APP|KcdMp.Steam.dll';            Path = Join-Path $InstallDir 'KcdMp.Steam.dll';            From = 'KcdMp.Steam.dll' },
+    @{ Key = 'APP|KcdMpServer.dll';            Path = Join-Path $InstallDir 'KcdMpServer.dll';            From = 'KcdMpServer.dll' },
     @{ Key = 'APP|KCDMP.dll';                  Path = Join-Path $InstallDir 'KCDMP.dll';                  From = 'KCDMP.dll' },
     @{ Key = 'MOD|Data\kdcmp.pak';             Path = Join-Path $ModDir 'Data\kdcmp.pak';                 From = 'kdcmp.pak' },
     @{ Key = 'APP|mod\kdcmp\Data\kdcmp.pak';   Path = Join-Path $InstallDir 'mod\kdcmp\Data\kdcmp.pak';   From = 'kdcmp.pak' }

@@ -134,6 +134,7 @@ public partial class GameBridge
     {
         if (!RowEvent.TryFromBytes(a.Payload, out var ne) || ne.Name.Length == 0) return;
         Interlocked.Increment(ref _w151HitRowsIn);
+        long w222Arrived = Environment.TickCount64;   // WO-222 B.1
         if (!_w151Reactions || !_npcRows) return;
         if (catalog is null || !catalog.TryGet(ne.Row, out var row))
         {
@@ -143,6 +144,7 @@ public partial class GameBridge
         if (!_npcEntityIds.TryGetValue(ne.Name, out uint neid))
         {
             Console.WriteLine($"MP-ACTION section=inbound kind=NpcHit npc={ne.Name} dispatch=dropped-no-entity (not a puppet here)");
+            Wo222NoteReactionNoBody(ne.Name, "no-body-here");
             Wo191AskBody(ne.Name, "hit-row-no-body");   // WO-191 3b
             return;
         }
@@ -151,11 +153,16 @@ public partial class GameBridge
         var r = await _combat.GhostSwingForResultAsync(neid, row.Spec, ct);
         if (r.Ok) Interlocked.Increment(ref _w151HitRowsPlayed);
         Console.WriteLine($"MP-ACTION section=inbound kind=NpcHit npc={ne.Name} row={ne.Row} table={row.Table} spec=\"{row.Spec}\" dispatch=native-row result={r.ReasonTag}");
+        // WO-214 D.1 (death_row): a death row is never replaced by a plain hit -- the copy's own weapon's death row, else the fall at the death
+        bool deathRow = W214On("death_row") && Wo214Rules.IsDeathRow(row.Spec);
+        if (r.Ok && Wo214Rules.IsDeathRow(row.Spec)) _w214DeathRowPlayedMs[ne.Name] = Environment.TickCount64;   // D.3: its reaction plays: give it its fall
+        if (!r.Ok && deathRow) r = await Wo214DeathRowAsync(ne.Name, neid, ne.Row, row, r.ReasonTag, ct) ?? r;
         // WO-187 C1 (mp_anim_hit_fallback): the host's reaction row did not play on the copy (another weapon in its hand here, another actor
         // class's row): the copy's own weapon's reaction row for the blow's zone, or a weaponless one -- a reaction, never none
-        if (!r.Ok && _w187HitFallback) r = await Wo187HitFallbackAsync(ne.Name, neid, ne.Row, row, r.ReasonTag, ct) ?? r;
-        else if (r.Ok && _w187HitFallback) _ = Wo187HitShownAsync(ne.Name, neid, ne.Row, row, ct);   // queued is not shown: looked at in 0.15 s
+        else if (!r.Ok && _w187HitFallback) r = await Wo187HitFallbackAsync(ne.Name, neid, ne.Row, row, r.ReasonTag, ct) ?? r;
+        else if (r.Ok && _w187HitFallback && !deathRow) _ = Wo187HitShownAsync(ne.Name, neid, ne.Row, row, ct);   // queued is not shown: looked at in 0.15 s
         if (r.Ok) await ExecLuaAsync($"if KCD2MP_NpcNativeSwingHold then KCD2MP_NpcNativeSwingHold(\"{ne.Name}\") end");
+        Wo222NoteReaction(ne.Name, neid, row.Spec, w222Arrived, r.Ok, r.ReasonTag);
     }
 
     private void Wo151OnCfg(string? arg)
@@ -693,6 +700,7 @@ public partial class GameBridge
         Wo201OnDisconnect();   // WO-201: its parts' session state goes
         Wo202OnDisconnect();
         Wo203OnDisconnect();
+        Wo223OnDisconnect();   // WO-223: the engine's own detail radius back, no attention pair named
         Wo151SceneReset("disconnect");
         Wo184Reset("disconnect");
         Wo167SceneReset();

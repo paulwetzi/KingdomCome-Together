@@ -1352,6 +1352,59 @@ void install() {
 
 bool armed() { return g_readArmed; }
 
+bool host_activity_wire(uint32_t eid, uint8_t out[30]) {
+    R::Activity a;
+    if (!read_activity(eid, &a)) return false;
+    // WO-164 N: the night undress rides the row's flags (capture_one's rule; the sleep-outfit read once per equipment element)
+    static std::unordered_map<uint32_t, NightRead> s_night;
+    void* c = ctx_of_eid(eid);
+    void* el = c ? equipment_element(c) : nullptr;
+    NightRead& nr = s_night[eid];
+    if (el != nr.elem) { nr.elem = el; nr.night = el ? in_sleep_outfit(c) : false; }
+    if (nr.night) a.flags = static_cast<uint8_t>(a.flags | R::kFlagNightDress);
+    R::encode(a, out);
+    return true;
+}
+bool host_hands(uint32_t eid, uint8_t left[16], uint8_t right[16]) {
+    KH::Hands hh;
+    if (!read_hands(eid, &hh)) return false;
+    std::memcpy(left, hh.left.b, 16);
+    std::memcpy(right, hh.right.b, 16);
+    return true;
+}
+
+int activity_path(const char* name) {
+    if (!name || !*name) return 0;
+    auto it = g_desired.find(lower(name));
+    if (it == g_desired.end()) return 0;
+    const Desired& d = it->second;
+    if (R::none(d.a)) return 0;
+    LARGE_INTEGER f, q;
+    QueryPerformanceFrequency(&f); QueryPerformanceCounter(&q);
+    const double now = static_cast<double>(q.QuadPart) / static_cast<double>(f.QuadPart);
+    if (R::gave_up(d.refusals, now - d.gaveUpAt)) return 3;
+    return d.matched ? 2 : 1;
+}
+
+bool object_stance_now(uint32_t eid) {
+    R::Activity cur;
+    if (!eid || !read_activity(eid, &cur)) return false;
+    const R::Activity a = R::normalised(cur);
+    // a seat or a bed only (a workstation, a cart seat or a kneel is not this rule's: a smith at his anvil owns his place too)
+    return (a.stance == R::kSitting || a.stance == R::kLying) && a.stanceObj != 0;
+}
+bool activity_text(const char* name, char* out, size_t n, uint64_t* objGuid) {
+    if (objGuid) *objGuid = 0;
+    if (out && n) out[0] = 0;
+    if (!name || !*name) return false;
+    auto it = g_desired.find(lower(name));
+    if (it == g_desired.end()) return false;
+    const R::Activity a = R::normalised(it->second.a);
+    if (objGuid) *objGuid = a.stanceObj ? a.stanceObj : a.unstanceObj;
+    if (out && n) { const std::string t = describe(a); std::snprintf(out, n, "%s", t.c_str()); }
+    return true;
+}
+
 // ---- WO-143: the pieces WO-143 builds on (npcstate.h) ------------------------
 namespace x {
 HMODULE xgenai() { return g_xg; }
