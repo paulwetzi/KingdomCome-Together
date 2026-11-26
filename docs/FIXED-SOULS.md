@@ -57,6 +57,11 @@ shift does; the speed stays, the line starts about 54 ms later. For tuning by ea
 (`VoicePreset`). The native log shows `FS-VOICE armed` and, per preset change, how many of Henry's lines were shifted.
 
 
+> **Parked (2026-11-26):** the own figure on your own screen (Henry hidden in first person, the copy in dialogues and cutscenes,
+> its hands and lips, the dialogue stand-in remake) is switched off with `KCD2MP.FS_SELF_ENABLED = false` and not offered in the
+> menu: it caused more trouble than it gave. You see Henry everywhere, as before; your partner still sees your chosen figure. The
+> code stays for later.
+
 ### Your figure in dialogues (off for now)
 
 A dialogue's shots do not film Henry but a stand-in the game makes for each conversation (`DialogTwin_<player>`). The DLL can remake

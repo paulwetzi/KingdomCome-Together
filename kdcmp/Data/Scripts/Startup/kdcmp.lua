@@ -21968,6 +21968,11 @@ KCD2MP.w160.mountStats = KCD2MP.w160.mountStats or { ready = 0, waited = 0, refu
 --   any other camera (a dialogue, a cutscene, the death camera): Henry is not drawn at all, the copy is
 -- Henry's parts are hidden by name: the DLL reads them (fs_attach), because they follow what he wears. mp_own_figure off: as before.
 --   FS-SELF view=own|other|off   FS-SELF spawned|removed
+-- PARKED (Paul, 2026-11-26): the own figure on the own screen (Henry hidden, the copy in dialogues and cutscenes, hands, lips) made
+-- the game worse -- talks that would not start, a fall through the floor at a wash tub, black dialogue cameras. The code stays for
+-- later; with this false nothing of it runs and the menu does not offer it. The partner still sees the chosen figure (that is the
+-- avatar's own path, not this one), the voice presets stay.
+KCD2MP.FS_SELF_ENABLED = false
 KCD2MP.fsSelf = KCD2MP.fsSelf or { on = true, soul = "", guid = "", cls = "", view = "off", names = {}, hidden = {}, gen = 0, askedAt = -100 }
 KCD2MP.FS_SELF_NAME = "kcd2mp_200"
 local FSS_KEEP = { clothing_arms = true, body_hands = true, hand_right = true, hand_left = true, entity_right = true, entity_left = true }
@@ -22021,6 +22026,7 @@ end
 
 function KCD2MP_SetOwnFigure(arg)
     local S = KCD2MP.fsSelf
+    if not KCD2MP.FS_SELF_ENABLED then S.on = false; mp_log("FS-SELF mp_own_figure parked (KCD2MP.FS_SELF_ENABLED is false)"); return true end
     local v = KCD2MP_Wo122ParseBool(arg)
     if v == "bad" then mp_log("mp_own_figure: expected on|off, got '" .. tostring(arg) .. "'"); return false end
     if v ~= nil then S.on = v end
@@ -22178,6 +22184,7 @@ end
 
 function KCD2MP_FsSelfStart()
     local S = KCD2MP.fsSelf
+    if not KCD2MP.FS_SELF_ENABLED then return end
     if S.running then return end
     S.running = true
     S.gen = S.gen + 1
@@ -28976,6 +28983,9 @@ do
           get = function() return M.version or "unknown (the helper is not running)" end },
         { id = "connection", group = "Help", label = "Connection", kind = "info", get = function() return M.connectionText() end },
     }
+    if not KCD2MP.FS_SELF_ENABLED then   -- the own figure is parked: its row is not offered
+        for i = #M.ITEMS, 1, -1 do if M.ITEMS[i].id == "own_figure" then table.remove(M.ITEMS, i) end end
+    end
 
     function M.connectionText()
         if not M.fresh() then return "Not connected" end
