@@ -194,12 +194,26 @@ do
     local shown = nil
     for _, c in ipairs(UICALLS) do if c.fn == "ShowTutorial" and c.text == "kcd2mp_menu" then shown = c end end
     check("b: the panel shows the menu", shown ~= nil and shown.more:find("Kingdom Come: Together", 1, true) ~= nil, shown and shown.more)
-    check("b: ...the chosen row marked, a group and the keys", shown ~= nil and shown.more:find("&gt; Change character", 1, true) ~= nil
+    check("b: ...the rows, a group and the keys", shown ~= nil and shown.more:find("Change character", 1, true) ~= nil
         and shown.more:find("Display", 1, true) ~= nil and shown.more:find("PgUp / PgDn choose", 1, true) ~= nil)
-    check("b: ...and no plain text under it", #DRAWS == 0, #DRAWS)
+    local marks, plain = 0, 0
+    for _, d in ipairs(DRAWS) do if d.text == "<<" then marks = marks + 1 end; if d.text:find("mod menu (", 1, true) then plain = plain + 1 end end
+    check("b: ...the chosen row marked beside the panel (drawn, no fade) and no plain menu under it", marks == 1 and plain == 0, marks .. "/" .. plain)
     local pushes = #UICALLS
     frames(3)
     check("b: the same page is never pushed again", #UICALLS == pushes, #UICALLS - pushes)
+    -- no flicker: a move inside the page pushes nothing, only the drawn marker moves
+    local y0 = nil
+    for _, d in ipairs(DRAWS) do if d.text == "<<" then y0 = d.y end end
+    DRAWS = {}
+    key("kcd2mp_menu_down")
+    frames(2)
+    local y1 = nil
+    for _, d in ipairs(DRAWS) do if d.text == "<<" then y1 = d.y end end
+    check("b: PgDn inside the page pushes no new panel (no flicker), the marker moves down", #UICALLS == pushes and y0 ~= nil and y1 ~= nil and y1 > y0,
+        tostring(#UICALLS - pushes) .. " " .. tostring(y0) .. "->" .. tostring(y1))
+    key("kcd2mp_menu_up")
+    frames(2)
     KCD2MP_SetMenuPlain("on")
     check("b: mp_menu_plain on hides the panel", UICALLS[#UICALLS].fn == "HideTutorial" and UICALLS[#UICALLS].text == "kcd2mp_menu")
     DRAWS = {}

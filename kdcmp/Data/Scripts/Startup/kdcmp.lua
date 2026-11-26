@@ -29244,33 +29244,51 @@ do
     local function pfont(s, colour, size) return "<font size='" .. size .. "' color='" .. colour .. "'>" .. s .. "</font>" end
 
     -- v = { title, sub, rows = { { text, sel, head, dim } }, help = { lines }, foot }. True = the panel shows it.
+    -- No flicker (Paul, 2026-11-26: "das Flackern nervt"): a push replays the card's fade, so the panel holds a fixed PAGE of
+    -- PANEL_ROWS rows (padded, every row one size, so each row sits at the same place on screen) and is pushed again only when the
+    -- page or a value on it changes. The chosen row is marked by "<<" drawn beside the frame and the help is drawn under it, both
+    -- with System.DrawText every frame (no fade). DrawText works in screen pixels (r_Width x r_Height), not in the render size;
+    -- the row places were measured in the game (exp_panelcal: row 1 at 16.36 % of the height, 1.982 % per row).
+    local PANEL_ROW0, PANEL_STEP, PANEL_MARK_X, PANEL_HELP_X, PANEL_HELP_Y = 0.1636, 0.01982, 0.196, 0.014, 0.488
     function KCD2MP_MenuPanel(v)
         local P = M.panel
         if P.plain then return false end
         local rows, selAt = v.rows or {}, 1
         for i, r in ipairs(rows) do if r.sel then selAt = i end end
-        local first = math.max(1, math.min(selAt - math.floor(PANEL_ROWS / 2), #rows - PANEL_ROWS + 1))
+        local first = math.floor((selAt - 1) / PANEL_ROWS) * PANEL_ROWS + 1
         local last = math.min(#rows, first + PANEL_ROWS - 1)
-        -- the game's font has no arrows (a box stood where one was): "&gt;" marks the chosen row, words say "more"
+        -- the game's font has no arrows (a box stood where one was): words say "more"
         local h = pfont(pesc(v.title), PC.head, 21) .. "<br/>"
-        if v.sub and v.sub ~= "" then h = h .. pfont(pesc(v.sub), PC.dim, 15) .. "<br/>" end
+        h = h .. pfont((v.sub and v.sub ~= "") and pesc(v.sub) or "&nbsp;", PC.dim, 15) .. "<br/>"
         h = h .. pfont(first > 1 and "(more above)" or "&nbsp;", PC.dim, 13) .. "<br/>"
-        for i = first, last do
+        for i = first, first + PANEL_ROWS - 1 do
             local r = rows[i]
-            if r.head then h = h .. pfont(pesc(r.text), PC.head, 16) .. "<br/>"
-            elseif r.sel then h = h .. pfont("&gt; " .. pesc(r.text), PC.sel, 18) .. "<br/>"
+            if not r then h = h .. pfont("&nbsp;", PC.ink, 17) .. "<br/>"
+            elseif r.head then h = h .. pfont(pesc(r.text), PC.head, 17) .. "<br/>"
             else h = h .. pfont("&nbsp;&nbsp;&nbsp;" .. pesc(r.text), r.dim and PC.dim or PC.ink, 17) .. "<br/>" end
         end
         h = h .. pfont(last < #rows and "(more below)" or "&nbsp;", PC.dim, 13) .. "<br/>"
-        if v.help and #v.help > 0 then h = h .. pfont(pesc(table.concat(v.help, " ")), PC.ink, 15) .. "<br/>" end
         if v.foot then h = h .. pfont(pesc(v.foot), PC.dim, 14) end
-        if h == P.html then return true end
         local now = os.clock()
-        if now - P.at < PANEL_GAP_S then return P.html ~= nil end
-        P.html, P.at = h, now
-        pcall(function() UIAction.CallFunction("hud", -1, "HideTutorial", P.id) end)
-        local ok = pcall(function() UIAction.CallFunction("hud", -1, "ShowTutorial", P.id, h, 3600000, false, 9, 0, false, "") end)
-        if not ok then P.html = nil; return false end
+        if h ~= P.html then
+            if P.html ~= nil and now - P.at < PANEL_GAP_S then return true end
+            P.html, P.at = h, now
+            pcall(function() UIAction.CallFunction("hud", -1, "HideTutorial", P.id) end)
+            local ok = pcall(function() UIAction.CallFunction("hud", -1, "ShowTutorial", P.id, h, 3600000, false, 9, 0, false, "") end)
+            if not ok then P.html = nil; return false end
+        end
+        -- every frame: the marker beside the chosen row and the help under the frame
+        local W = tonumber(System.GetCVar and System.GetCVar("r_Width")) or 2560
+        local H = tonumber(System.GetCVar and System.GetCVar("r_Height")) or 1440
+        local k = selAt - first
+        if rows[selAt] and not rows[selAt].head then
+            pcall(System.DrawText, math.floor(W * PANEL_MARK_X), math.floor(H * (PANEL_ROW0 + k * PANEL_STEP - 0.0085)), "<<", 1.6)
+        end
+        if v.help and #v.help > 0 then
+            local y = H * PANEL_HELP_Y
+            local lines = M.wrap and M.wrap(table.concat(v.help, " "), 70) or { table.concat(v.help, " ") }
+            for _, ln in ipairs(lines) do pcall(System.DrawText, math.floor(W * PANEL_HELP_X), math.floor(y), ln, 1.4); y = y + H * 0.018 end
+        end
         return true
     end
 
