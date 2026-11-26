@@ -2,6 +2,7 @@
 // GPLv3 section 7 additional terms: NOTICE. This project's own code only; Kingdom Come: Deliverance II and its
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo141.h"
+#include "motion.h"
 #include "wo208.h"
 #include "wo209.h"
 #include "wo209_rules.h"
@@ -1254,6 +1255,10 @@ void research_watch() {
         else if (!std::strcmp(verb, "captureon")) { g_captureNpcs = true; g_capturePlayer = true; logf("WO141-R capture on (research)"); }
         else if (!std::strcmp(verb, "stances")) { for (int i = 0; i < 8; ++i) logf("WO141-R stance %d = %s", i, stance_label(i)); }
         else if (k >= 2 && !std::strcmp(verb, "unst")) logf("WO141-R unstance '%s' = %d", a1, unstance_id(a1));
+        else if (k >= 2 && !std::strcmp(verb, "attach")) {   // fixed-soul research: attach <entity name> -- its character's attachments
+            void* ae = entity_by_name(a1);
+            if (ae) motion::attach_list(ae, a1); else logf("FS-ATTACH %s: no such entity", a1);
+        }
         else if (k >= 3 && !std::strcmp(verb, "frag")) {   // frag <entity> <fragment spec>: the native action path (combat swings')
             void* fe = entity_by_name(a1);
             const int r = fe ? static_cast<int>(rttr::ghost_swing(engine::entity_id(fe), rest)) : -1;

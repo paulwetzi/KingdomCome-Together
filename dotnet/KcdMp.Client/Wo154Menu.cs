@@ -46,6 +46,7 @@ public static class Wo154MenuRules
         new("PartnerMarker", Kind.OnOff, false),   // WO-164 C2: mp_partner_marker
         new("PartnerMarkerArt", Kind.OnOff, false),   // WO-171 M: "Marker style" (on = the knight, off = the game's plain pin)
         new("Quicksave", Kind.OnOff, true),           // WO-178 0.d: mp_quicksave (the host's setting)
+        new("OwnFigure", Kind.OnOff, false),          // fixed-soul build: the own figure on this player's own screen
     };
 
     /// <summary>

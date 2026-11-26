@@ -2351,4 +2351,89 @@ void set_ko_hold(uint32_t eid, bool on) {
     if (on && g_koHold.size() < 16) g_koHold.push_back(eid);
 }
 
+// ---- Fixed-soul build (research, read-only): the attachments of a body's character --------------------------------------------
+// The own-figure copy stands where the player's eyes are: its head has to be hidden, and Lua hides an attachment only by its name,
+// which the composed NPC characters do not share with the skeleton file ("head" hid nothing). This reads them: the character's
+// attachment manager (found by its RTTI vftable inside the character, or through a pointer there), its array of attachments (each
+// checked by its RTTI vftable), and the text each attachment points at. Reads only: no engine call but GetCharacter(0).
+namespace {
+bool text_at(const void* p, char* out, size_t n) {
+    if (!p) return false;
+    size_t i = 0;
+    for (; i + 1 < n; ++i) {
+        char c = 0;
+        if (!rd(p, i, &c)) return false;
+        if (!c) break;
+        if (c < 0x20 || c > 0x7E) return false;
+        out[i] = c;
+    }
+    out[i] = 0;
+    return i >= 2 && i + 1 < n;
+}
+}   // namespace
+
+int attach_list(void* ent, const char* label, char* names, int cap) {
+    int nn = 0;
+    if (names && cap > 0) names[0] = 0;
+    static void* const* vMgr = nullptr;
+    static void* const* vAtt[5] = {};
+    static bool init = false;
+    static const char* const kCls[5] = {"BONE", "SKIN", "FACE", "PROX", "VCLOTH"};
+    if (!init) {
+        init = true;
+        HMODULE an = GetModuleHandleA("CryAnimation.dll");
+        static const char* const kDec[5] = {".?AVCAttachmentBONE@@", ".?AVCAttachmentSKIN@@", ".?AVCAttachmentFACE@@", ".?AVCAttachmentPROX@@",
+                                            ".?AVCAttachmentVCLOTH@@"};
+        if (an) {
+            vMgr = anchor::find_vftable(an, ".?AVCAttachmentManager@@", 0);
+            for (int i = 0; i < 5; ++i) vAtt[i] = anchor::find_vftable(an, kDec[i], 0);
+        }
+        logf("FS-ATTACH vftables manager=%p bone=%p skin=%p face=%p prox=%p vcloth=%p", static_cast<const void*>(vMgr), static_cast<const void*>(vAtt[0]),
+             static_cast<const void*>(vAtt[1]), static_cast<const void*>(vAtt[2]), static_cast<const void*>(vAtt[3]), static_cast<const void*>(vAtt[4]));
+    }
+    auto attCls = [&](void* a) -> int { for (int i = 0; i < 5; ++i) if (vAtt[i] && is_a(a, vAtt[i])) return i; return -1; };
+    if (!g_skelReads || !ent || !vMgr) { logf("FS-ATTACH %s: not readable (skeleton reads %d, manager vftable %p)", label, g_skelReads ? 1 : 0, static_cast<const void*>(vMgr)); return -1; }
+    void* fnChar = vslot(ent, kEntGetCharacter);
+    void* ch = nullptr;
+    if (!fnChar || fnChar != g_fnEntGetChar || !call_p1u(fnChar, ent, 0, &ch) || !is_a(ch, g_vftCharInst)) { logf("FS-ATTACH %s: no character", label); return -1; }
+    void* mgr = nullptr; size_t mgrOff = 0; bool viaPtr = false;
+    for (size_t off = 8; off < 0x4000 && !mgr; off += 8) {
+        void* q = nullptr;
+        if (!rd(ch, off, &q)) break;
+        if (q == static_cast<const void*>(vMgr)) { mgr = static_cast<char*>(ch) + off; mgrOff = off; }
+        else if (q && plausible_addr(reinterpret_cast<uintptr_t>(q)) && is_a(q, vMgr)) { mgr = q; mgrOff = off; viaPtr = true; }
+    }
+    if (!mgr) { logf("FS-ATTACH %s: no attachment manager in the character's first 0x4000 bytes", label); return -1; }
+    int total = 0;
+    for (size_t off = 8; off < 0x600; off += 8) {
+        void* arr = nullptr;
+        if (!rd(mgr, off, &arr) || !arr || !plausible_addr(reinterpret_cast<uintptr_t>(arr))) continue;
+        void* first = nullptr;
+        if (!rd(arr, 0, &first) || attCls(first) < 0) continue;
+        int n = 0;
+        for (; n < 256; ++n) {
+            void* a = nullptr;
+            if (!rd(arr, static_cast<size_t>(n) * 8, &a)) break;
+            const int cls = attCls(a);
+            if (cls < 0) break;
+            char t1[64]{}, t2[64]{};
+            for (size_t ao = 8; ao < 0x400 && !t2[0]; ao += 8) {
+                void* s = nullptr;
+                char b[64]{};
+                if (!rd(a, ao, &s) || !s || !plausible_addr(reinterpret_cast<uintptr_t>(s)) || !text_at(s, b, sizeof b)) continue;
+                if (!t1[0]) std::memcpy(t1, b, sizeof b); else if (std::strcmp(t1, b) != 0) std::memcpy(t2, b, sizeof b);
+            }
+            if (names) {   // the reply: the attachment's own name, comma-joined
+                if (t1[0] && nn + static_cast<int>(std::strlen(t1)) + 2 < cap) nn += std::snprintf(names + nn, static_cast<size_t>(cap - nn), "%s%s", nn ? "," : "", t1);
+            } else {
+                logf("FS-ATTACH %s mgr+0x%zX #%d %s %s | %s", label, off, n, kCls[cls], t1[0] ? t1 : "-", t2[0] ? t2 : "-");
+            }
+        }
+        total += n;
+        if (n > 0) break;   // the first array that holds attachments is the list
+    }
+    if (!names) logf("FS-ATTACH %s: %d attachment(s), manager at character+0x%zX%s", label, total, mgrOff, viaPtr ? " (a pointer)" : " (embedded)");
+    return total;
+}
+
 } // namespace kcdmp::motion

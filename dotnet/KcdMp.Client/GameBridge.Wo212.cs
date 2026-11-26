@@ -31,6 +31,39 @@ public partial class GameBridge
         await ExecLuaAsync($"if KCD2MP_W212KeysDone then KCD2MP_W212KeysDone({result}, \"{f[1]}\") end");
     }
 
+    /// <summary>Fixed-soul build, <c>fs_self on|off &lt;body&gt;</c>: the DLL drives the own figure's copy from the local player.</summary>
+    private async Task FsSelfAsync(string? arg)
+    {
+        var f = (arg ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (f.Length != 2 || f[0] is not ("on" or "off") || !f[1].StartsWith("kcd2mp_", StringComparison.Ordinal) || f[1].Length > 60) return;
+        byte[] name = System.Text.Encoding.ASCII.GetBytes(f[1]);
+        var a = new byte[2 + name.Length];
+        a[0] = (byte)(f[0] == "on" ? 1 : 0); a[1] = (byte)name.Length; name.CopyTo(a, 2);
+        int state = -1;
+        try { var r = await _combat.Wo163Async(Protocol.FsOpSelf, a); if (r is { Ok: true, Payload.Length: >= 1 } x) state = x.Payload[0]; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Console.WriteLine($"FS-SELF: {ex.Message}"); }
+        Console.WriteLine($"FS-SELF {f[0]} {f[1]}: state {state}");
+    }
+
+    /// <summary>Fixed-soul build, <c>fs_attach &lt;body&gt;</c>: that body's attachment names, handed to the mod (it hides by name).</summary>
+    private async Task FsAttachAsync(string? arg)
+    {
+        string body = (arg ?? "").Trim();
+        if (body.Length == 0 || body.Length > 60 || !body.All(c => char.IsAsciiLetterOrDigit(c) || c == '_')) return;
+        byte[] name = System.Text.Encoding.ASCII.GetBytes(body);
+        var a = new byte[1 + name.Length];
+        a[0] = (byte)name.Length; name.CopyTo(a, 1);
+        string csv = "";
+        try
+        {
+            var r = await _combat.Wo163Async(Protocol.FsOpAttachNames, a);
+            if (r is { Ok: true } x && x.Payload.Length > 1) csv = System.Text.Encoding.ASCII.GetString(x.Payload).TrimEnd((char)0);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Console.WriteLine($"FS-ATTACH: {ex.Message}"); }
+        if (!csv.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or ',' or '.' or '-')) csv = "";
+        await ExecLuaAsync($"if KCD2MP_FsSelfAttach then KCD2MP_FsSelfAttach(\"{body}\", \"{csv}\") end");
+    }
+
     /// <summary><c>w212_crime clear|off|on</c>: a joiner asks its host; a host applies it to the partners only under the joint mode.</summary>
     private async Task Wo212OnCrimeAsync(string? arg)
     {

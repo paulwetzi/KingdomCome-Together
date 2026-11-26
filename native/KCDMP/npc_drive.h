@@ -46,6 +46,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace kcdmp::motion { struct State2; }
+
 namespace kcdmp::npcdrive {
 
 // Result byte 2 of a bind/hold reply and the reason of an unsolicited drop.
@@ -78,6 +80,8 @@ bool armed();
 // 0x10: [count:1]{[src:1][nameLen:1][name][x:4f][y:4f][z:4f][rot:4f][flags:1]
 //                  [seq:2][senderMs:4][arrivalQpc:8]}*count
 uint8_t on_samples(const uint8_t* body, size_t len);
+// Fixed-soul build: one sample made in this process (the own figure's copy follows the local player), queued like a pipe sample.
+void inject_sample(const char* name, float x, float y, float z, float rot, uint8_t flags, uint16_t seq, const motion::State2* st2 = nullptr);
 // 0x12: [ms:2][nameLen:1][name]
 uint8_t on_hold(const uint8_t* body, size_t len);
 // 0x13: [nativeOn:1][senderClockOn:1]

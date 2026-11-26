@@ -1454,6 +1454,7 @@ public partial class GameBridge(ClientConfig config)
         // WO-19: the trailing release-version field is optional and unlengthed
         // on purpose -- see Protocol.cs's release version layer doc -- so an old
         // relay that only reads [version][nameLen][name] is unaffected.
+        _fsSelfName = config.PlayerName ?? Environment.MachineName;   // fixed-soul build: the own figure's fixed soul is looked up by it
         await stream.WriteAsync(RelayConnector.BuildHandshake(config.PlayerName ?? Environment.MachineName, ReleaseVersionInfo.Wire), appCt);   // WO-211 0.2: version+build id
 
         // --- Ack (S→C 0xFF [id:1]) or a rejection: 0x09 [serverVersion:1],
@@ -6099,6 +6100,12 @@ public partial class GameBridge(ClientConfig config)
                 return;
             case "w151_crime":       // WO-151 Phase 5: joint responsibility (the host's own crime, its resolution)
                 _ = Wo151OnCrimeAsync(arg);
+                return;
+            case "fs_self":          // fixed-soul build: on|off <body> -- the own figure's copy follows the player
+                _ = FsSelfAsync(arg);
+                return;
+            case "fs_attach":        // fixed-soul build: <body> -- its attachment names back to the mod
+                _ = FsAttachAsync(arg);
                 return;
             case "w212_keys":        // WO-212: release the stuck input filter
                 _ = Wo212OnKeysAsync(arg);

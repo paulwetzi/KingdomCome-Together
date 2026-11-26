@@ -1009,6 +1009,23 @@ uint8_t on_samples(const uint8_t* body, size_t len) {
     return kOk;
 }
 
+// Fixed-soul build: a sample made here (the own figure's copy follows the local player), queued like one from the pipe.
+void inject_sample(const char* name, float x, float y, float z, float rot, uint8_t flags, uint16_t seq, const motion::State2* st2) {
+    if (!name || !*name || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(rot)) return;
+    InSample s{};
+    s.src = 0;
+    copy_name(name, s.name, sizeof s.name);
+    s.x = x; s.y = y; s.z = z; s.rot = rot;
+    s.flags = static_cast<uint8_t>(flags & 0x7F);
+    s.seq = seq;
+    LARGE_INTEGER q; QueryPerformanceCounter(&q);
+    s.arrivalQpc = q.QuadPart;
+    if (st2) { s.st2 = *st2; s.haveSt2 = true; }
+    std::lock_guard<std::mutex> lock(g_inboxMutex);
+    if (g_inSamples.size() + 1 > kMaxInbox) g_inSamples.clear();
+    g_inSamples.push_back(s);
+}
+
 uint8_t on_hold(const uint8_t* body, size_t len) {
     if (len < 4) return kBadRequest;
     InHold h{};

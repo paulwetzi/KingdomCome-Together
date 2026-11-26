@@ -87,6 +87,7 @@ add_library(KCDMP SHARED
     wo210_hit.cpp
     wo211.cpp
     wo212.cpp
+    fs_self.cpp
     wo213.cpp
     wo214.cpp
     wo215.cpp

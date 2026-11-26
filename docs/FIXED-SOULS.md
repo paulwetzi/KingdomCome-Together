@@ -32,7 +32,22 @@ powershell -ExecutionPolicy Bypass -File .\Install-FixedSoul.ps1 -Uninstall
 5. **End** on an NPC takes it. After a short moment your partner sees you as this figure.
 6. **Default figure** at the top resets everything.
 
-On your own screen you stay Henry. The change is locked during a fight and on a horse.
+The change is locked during a fight and on a horse.
+
+### Your figure on your own screen
+
+With **My figure on my screen** on (menu group Display, on by default) you no longer see Henry either:
+
+- In first person Henry's body is hidden except his arms and hands, so looking down shows no Henry.
+- In dialogues and cutscenes Henry is not drawn at all. A copy of you as the chosen figure stands in his place. The DLL moves it
+  every frame with your own position and walk, the same way your partner's screen moves your figure.
+
+The copy does not speak or gesture like Henry does. `kcd.log` shows `FS-SELF spawned`, `FS-SELF view=own|other`, the native log
+`FS-SELF bind`. `mp_own_figure off` turns it off.
+
+### The menu
+
+The menu and the character window are drawn on the game's own parchment panel. `mp_menu_plain on` brings back the plain white text.
 
 ## Test
 
@@ -52,6 +67,7 @@ says `SPAWN MISMATCH`, the game rejected this figure. Choose another one.
 - Entries marked **(!)** are story figures, guards or enemies. Their own AI is paused so they do nothing by themselves.
   Because of that they may not get up by themselves after a knockout.
 - NPC names in the window come from the game's German text table.
+- Your own figure in dialogues and cutscenes only stands and walks: no lip movement, no gestures, no story animations.
 
 ## Fixed mapping by file (optional)
 

@@ -71,6 +71,10 @@ public static partial class Protocol
                       CrimeAskHorse = 6;   // WO-214: "<x> <y> <z> <rot> here|ridden|gone", this player's called horse
     /// <summary>WO-212: the native op that releases the input filter "no_inventory".</summary>
     public const byte Wo212OpInputFilter = 240;   // fixed-soul build: 150-153 are the official WO-215's
+    /// <summary>Fixed-soul build: the own figure's copy follows the local player (native fs_self.h).</summary>
+    public const byte FsOpSelf = 241;
+    /// <summary>Fixed-soul build: a body's attachment names, comma-joined.</summary>
+    public const byte FsOpAttachNames = 242;
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
                       CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8,

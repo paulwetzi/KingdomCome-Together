@@ -21959,6 +21959,154 @@ end
 --   WO160-MOUNT id=<n> ready after <s> s | refused after <s> s: <why>
 KCD2MP.w160.mountPollS, KCD2MP.w160.mountMaxS, KCD2MP.w160.mountReachM = 0.25, 5.0, 25.0
 KCD2MP.w160.mountStats = KCD2MP.w160.mountStats or { ready = 0, waited = 0, refused = 0 }
+-- ===== Fixed-soul build: the own figure on the player's own screen ==================================================================
+-- The partner sees this player as the chosen figure; this player saw Henry -- in every dialogue and cutscene the camera shows him. A
+-- local copy of this player now stands in Henry's place: an NPC body with the chosen soul (kcd2mp_200, a name the stray sweep never
+-- touches and the agent never streams), driven by the DLL from this player's own position and body state every frame -- the same
+-- writer and gait as the partner's figure (FS-SELF in the native log). Two views:
+--   own eyes (the camera at the player's eyes): Henry's body is hidden but his arms, hands and what they hold; the copy is not drawn
+--   any other camera (a dialogue, a cutscene, the death camera): Henry is not drawn at all, the copy is
+-- Henry's parts are hidden by name: the DLL reads them (fs_attach), because they follow what he wears. mp_own_figure off: as before.
+--   FS-SELF view=own|other|off   FS-SELF spawned|removed
+KCD2MP.fsSelf = KCD2MP.fsSelf or { on = true, soul = "", guid = "", cls = "", view = "off", names = {}, hidden = {}, gen = 0, askedAt = -100 }
+KCD2MP.FS_SELF_NAME = "kcd2mp_200"
+local FSS_KEEP = { clothing_arms = true, body_hands = true, hand_right = true, hand_left = true, entity_right = true, entity_left = true }
+
+local function fssEntity()
+    local e = nil
+    pcall(function() e = System.GetEntityByName(KCD2MP.FS_SELF_NAME) end)
+    return e
+end
+
+local function fssHenryShow()
+    local S = KCD2MP.fsSelf
+    if player and player.HideAttachment then
+        for n in pairs(S.hidden) do pcall(function() player:HideAttachment(0, n, false, false) end) end
+    end
+    S.hidden = {}
+    if player and player.DrawSlot then pcall(function() player:DrawSlot(0, 1) end) end
+end
+
+-- Only what was changed is put back: nothing at all when the figure never showed.
+local function fssRemove(why)
+    local S = KCD2MP.fsSelf
+    if S.view == "off" and not next(S.hidden) then return end
+    local e = fssEntity()
+    KCD2MP_EmitEvent("fs_self", "off " .. KCD2MP.FS_SELF_NAME)
+    if e then pcall(function() System.RemoveEntity(e.id) end); mp_log("FS-SELF removed (" .. tostring(why) .. ")") end
+    fssHenryShow()
+    S.view = "off"
+end
+
+-- The agent: the chosen figure for this player's own screen ("" = none).
+function KCD2MP_FsSelfLook(soul, guid, cls)
+    local S = KCD2MP.fsSelf
+    soul, guid, cls = tostring(soul or ""), tostring(guid or ""), tostring(cls or "")
+    if soul == S.soul and guid == S.guid and cls == S.cls then return true end
+    S.soul, S.guid, S.cls = soul, guid, cls
+    mp_log("FS-SELF figure " .. (soul ~= "" and soul or "none"))
+    fssRemove("a new figure")
+    KCD2MP_FsSelfStart()
+    return true
+end
+
+-- The agent: a body's attachment names (the DLL read them).
+function KCD2MP_FsSelfAttach(body, csv)
+    local S, list = KCD2MP.fsSelf, {}
+    for n in string.gmatch(tostring(csv or ""), "[^,]+") do list[#list + 1] = n end
+    S.names[tostring(body)] = list
+    S.namesAt = os.clock()
+    return true
+end
+
+function KCD2MP_SetOwnFigure(arg)
+    local S = KCD2MP.fsSelf
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_own_figure: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil then S.on = v end
+    if not S.on then fssRemove("mp_own_figure off") else KCD2MP_FsSelfStart() end
+    mp_log("FS-SELF mp_own_figure " .. (S.on and "on" or "off"))
+    return true
+end
+pcall(System.AddCCommand, "mp_own_figure", "KCD2MP_SetOwnFigure(%line)", "on = this player sees the chosen figure instead of Henry in dialogues and cutscenes")
+
+-- Is the camera this player's own eyes?
+local function fssOwnEyes()
+    local own = true
+    pcall(function()
+        local c, p = System.GetViewCameraPos(), player:GetWorldPos()
+        local dz, dxy = c.z - p.z, math.sqrt((c.x - p.x) ^ 2 + (c.y - p.y) ^ 2)
+        own = dxy < 0.6 and dz > 0.9 and dz < 2.1
+    end)
+    return own
+end
+
+-- The chain runs while a figure is chosen and mp_own_figure is on (KCD2MP_FsSelfStart), 10 times a second; it ends itself otherwise.
+function KCD2MP_FsSelfTick(gen)
+    local S = KCD2MP.fsSelf
+    if gen ~= S.gen then return end
+    if not (S.on and S.guid ~= "" and S.cls ~= "") then
+        S.running = false
+        fssRemove(not S.on and "off" or "no figure")
+        return
+    end
+    Script.SetTimer(100, function() KCD2MP_FsSelfTick(gen) end)
+    -- a session the agent runs (it drives the copy): its session word is fresh and this player has a role
+    local M = KCD2MP.w154menu
+    local session = M ~= nil and M.fresh ~= nil and M.fresh() and M.role ~= nil and M.role ~= "none"
+    if not (player ~= nil and session) then
+        fssRemove("no session")
+        return
+    end
+    local e = fssEntity()
+    local now = os.clock()
+    if not e then
+        local p = nil
+        pcall(function() p = player:GetWorldPos() end)
+        if not p then return end
+        pcall(function() XGenAIModule.SpawnEntity({ Name = KCD2MP.FS_SELF_NAME, ClassName = S.cls, Pos = { p.x, p.y, p.z }, SharedSoulGuid = S.guid }) end)
+        e = fssEntity()
+        if not e then return end
+        if mp_set_no_save then pcall(mp_set_no_save, e) end
+        pcall(System.ExecuteCommand, "wh_ai_PauseNPC " .. KCD2MP.FS_SELF_NAME)
+        pcall(function() e:EnablePhysics(false) end)   -- it stands where the player stands: never pushes him
+        pcall(function() e:DrawSlot(0, 0) end)
+        KCD2MP_EmitEvent("fs_self", "on " .. KCD2MP.FS_SELF_NAME)
+        mp_log("FS-SELF spawned " .. S.soul)
+        S.view = "spawned"
+    end
+    -- Henry's part names: asked again every 10 s (what he wears changes them)
+    local pname = nil
+    pcall(function() pname = player:GetName() end)
+    if pname and now - S.askedAt >= 10.0 then S.askedAt = now; KCD2MP_EmitEvent("fs_attach", pname) end
+    -- a dialogue or a cutscene shows the player from the outside (its cameras are attached to him: the camera's position alone does not
+    -- tell); every other camera away from his eyes too (the death camera)
+    local talking = false
+    pcall(function() talking = player.human:IsInDialog() == true end)
+    local view = (talking or KCD2MP.cutsceneActive == true or not fssOwnEyes()) and "other" or "own"
+    if view == "own" then
+        pcall(function() player:DrawSlot(0, 1) end)
+        for _, n in ipairs(pname and S.names[pname] or {}) do
+            if not FSS_KEEP[n] and not S.hidden[n] then
+                if pcall(function() player:HideAttachment(0, n, true, true) end) then S.hidden[n] = true end
+            end
+        end
+        pcall(function() e:DrawSlot(0, 0) end)
+    else
+        pcall(function() player:DrawSlot(0, 0) end)
+        pcall(function() e:DrawSlot(0, 1) end)
+    end
+    if view ~= S.view then mp_log("FS-SELF view=" .. view); S.view = view end
+end
+
+function KCD2MP_FsSelfStart()
+    local S = KCD2MP.fsSelf
+    if S.running then return end
+    S.running = true
+    S.gen = S.gen + 1
+    KCD2MP_FsSelfTick(S.gen)
+end
+
 -- ===== Fixed-soul build: a partner really sits on the stand-in horse=============================================================
 -- The game hides a body it finds wedged in something (the stand-in spawns exactly inside the copy of the horse the partner rides, or in a
 -- cart). The mount gate then refused every try, the repair gave up after five, and the figure stayed at saddle height: standing on the horse.
@@ -28666,6 +28814,9 @@ do
         { id = "marker_style", group = "Display", label = "Marker style (knight)", kind = "onoff", save = "PartnerMarkerArt",
           cmd = "mp_partner_marker_style", fn = "KCD2MP_W171SetStyle", get = function() return KCD2MP.w171 ~= nil and KCD2MP.w171.style ~= "companion" end,
           help = "On: your partner is the artist's knight on the map, in their colour, turning with them. Off: the game's plain pin." },
+        { id = "own_figure", group = "Display", label = "My figure on my screen", kind = "onoff", save = "OwnFigure",
+          cmd = "mp_own_figure", fn = "KCD2MP_SetOwnFigure", get = function() return KCD2MP.fsSelf ~= nil and KCD2MP.fsSelf.on end,
+          help = "On: in dialogues and cutscenes you see your chosen figure instead of Henry, and looking down you no longer see Henry's body." },
         { id = "friendly_fire", group = "Gameplay", label = "Friendly fire", kind = "onoff", host = true, save = "FriendlyFire",
           cmd = "mp_friendly_fire", fn = "KCD2MP_Wo121SetFriendlyFire",
           get = function() return KCD2MP.w121 ~= nil and KCD2MP.w121.friendlyFire end,

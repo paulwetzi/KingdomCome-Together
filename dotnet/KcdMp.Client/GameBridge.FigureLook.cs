@@ -87,6 +87,22 @@ public partial class GameBridge
         catch (Exception ex) { Console.WriteLine($"MP-FIGURE pick failed: {ex.GetType().Name}"); }
     }
 
+    // Fixed-soul build: the own figure for this player's own screen -- the chosen character, else the fixed soul of this player's name.
+    // Told to the mod when it changes and every 10 s (a world load starts the mod's state over).
+    private string _fsSelfName = "";
+    private string _fsSelfSent = "";
+    private long _fsSelfSentMs;
+    private async Task FsSelfLookTickAsync()
+    {
+        string soul = "", guid = "", cls = "";
+        if (_myFigure is { } f) { soul = f.Soul; guid = f.Id.ToString(); cls = f.Class; }
+        else if (FixedSoulOf(_fsSelfName) is { } e) { soul = e.Soul; guid = e.Guid; cls = "NPC_Female"; }   // the fixed souls are women's
+        string key = soul + "|" + guid + "|" + cls;
+        if (key == _fsSelfSent && Environment.TickCount64 - _fsSelfSentMs < 10_000) return;
+        _fsSelfSent = key; _fsSelfSentMs = Environment.TickCount64;
+        await ExecLuaAsync($"if KCD2MP_FsSelfLook then KCD2MP_FsSelfLook(\"{EscapeLua(soul)}\",\"{EscapeLua(guid)}\",\"{EscapeLua(cls)}\") end");
+    }
+
     private Task FigureErrorAsync(string text) =>
         ExecLuaAsync($"if KCD2MP_FigureError then KCD2MP_FigureError(\"{EscapeLua(text)}\") end");
 
@@ -105,6 +121,7 @@ public partial class GameBridge
                 Console.WriteLine($"MP-FIGURE saved choice: {(_myFigure is null ? "not in this game" : _myFigure.Soul)}");
             }
         }
+        await FsSelfLookTickAsync();
         if (_myFigure is not null && Environment.TickCount64 - Interlocked.Read(ref _figureSentMs) >= FigureResendMs)
             await FigureSendAsync("heartbeat");
     }
