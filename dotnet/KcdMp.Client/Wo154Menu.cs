@@ -47,6 +47,7 @@ public static class Wo154MenuRules
         new("PartnerMarkerArt", Kind.OnOff, false),   // WO-171 M: "Marker style" (on = the knight, off = the game's plain pin)
         new("Quicksave", Kind.OnOff, true),           // WO-178 0.d: mp_quicksave (the host's setting)
         new("OwnFigure", Kind.OnOff, false),          // fixed-soul build: the own figure on this player's own screen
+        new("SavingOff", Kind.OnOff, false),          // fixed-soul build: this game does not save while the mod is tested
     };
 
     /// <summary>

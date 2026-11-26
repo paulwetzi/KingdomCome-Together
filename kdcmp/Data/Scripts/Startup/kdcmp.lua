@@ -22031,12 +22031,14 @@ end
 pcall(System.AddCCommand, "mp_own_figure", "KCD2MP_SetOwnFigure(%line)", "on = this player sees the chosen figure instead of Henry in dialogues and cutscenes")
 
 -- Is the camera this player's own eyes?
+-- true when the camera is at the player's eyes -- or far away from him (> 30 m: a screen of the game's own, the trade screen's camera
+-- jumps 8.7 km; field 2026-11-26: the copy stood in a T-pose in front of the player after a trade)
 local function fssOwnEyes()
     local own = true
     pcall(function()
         local c, p = System.GetViewCameraPos(), player:GetWorldPos()
         local dz, dxy = c.z - p.z, math.sqrt((c.x - p.x) ^ 2 + (c.y - p.y) ^ 2)
-        own = dxy < 0.6 and dz > 0.9 and dz < 2.1
+        own = (dxy < 0.6 and dz > 0.9 and dz < 2.1) or dxy > 30.0
     end)
     return own
 end
@@ -22146,8 +22148,16 @@ function KCD2MP_FsSelfTick(gen)
             end
         end
         pcall(function() e:DrawSlot(0, 0) end)
+        -- hidden as a whole, not only undrawn: it stands where the player stands, and the game offered it to talk to (its name in the
+        -- corner instead of the NPC's, field 2026-11-26)
+        local hid = false
+        pcall(function() hid = e:IsHidden() == true end)
+        if not hid then pcall(function() e:Hide(1) end) end
     else
         pcall(function() player:DrawSlot(0, 0) end)
+        local hid = false
+        pcall(function() hid = e:IsHidden() == true end)
+        if hid then pcall(function() e:Hide(0) end) end
         pcall(function() e:DrawSlot(0, 1) end)
     end
     fssHands(e, now, view == "other")
@@ -23870,6 +23880,7 @@ do   -- WO-178's do-block
     -- Returns true when the request went out (the file follows; the agent reports it with KCD2MP_W178SaveDone).
     function KCD2MP_W178RequestSave(why)
         local w = KCD2MP.w178
+        if KCD2MP_FsSavingAllowed and not KCD2MP_FsSavingAllowed(why) then return false end   -- fixed-soul build: saving off
         w.stats.asked = w.stats.asked + 1
         if KCD2MP_W175BeforeSave then pcall(KCD2MP_W175BeforeSave, why) end   -- S4: the agent checks the file the engine writes
         if KCD2MP_W174Clean then pcall(KCD2MP_W174Clean, "save") end          -- WO-174: partner-figure fight records out before the save
@@ -28884,8 +28895,11 @@ do
         { id = "own_figure", group = "Display", label = "My figure on my screen", kind = "onoff", save = "OwnFigure",
           cmd = "mp_own_figure", fn = "KCD2MP_SetOwnFigure", get = function() return KCD2MP.fsSelf ~= nil and KCD2MP.fsSelf.on end,
           help = "On: in dialogues and cutscenes you see your chosen figure instead of Henry, and looking down you no longer see Henry's body." },
+        { id = "saving_off", group = "Display", label = "Saving off (testing)", kind = "onoff", save = "SavingOff",
+          cmd = "mp_saving_off", fn = "KCD2MP_SetSavingOff", get = function() return KCD2MP.fsNoSave ~= nil and KCD2MP.fsNoSave.on end,
+          help = "On: your game does not save at all -- no autosave, no manual save -- so your world stays as it is while new builds are tried." },
         { id = "voice_preset", group = "Display", label = "My voice", kind = "vpreset", get = function() return KCD2MP.fsVoice ~= nil and KCD2MP.fsVoice.preset or "off" end,
-          help = "Henry's own voice lines, higher: Higher, Woman, Bright -- or Deeper. Only you hear it. End steps to the next one." },
+          help = "Henry's own voice lines as a woman's voice: Woman, brighter, warmer -- or Deeper. Only you hear it. End steps to the next one." },
         { id = "friendly_fire", group = "Gameplay", label = "Friendly fire", kind = "onoff", host = true, save = "FriendlyFire",
           cmd = "mp_friendly_fire", fn = "KCD2MP_Wo121SetFriendlyFire",
           get = function() return KCD2MP.w121 ~= nil and KCD2MP.w121.friendlyFire end,
@@ -33825,6 +33839,50 @@ do
         if tostring(name) == tostring(KCD2MP.w122 and KCD2MP.w122.lockName) then W201.lockGen.removed = true end
         return true
     end
+end
+
+-- ===== Fixed-soul build: saving off while the mod is being tested ================================================================
+-- mp_saving_off on (the default for now): this machine's game does not save at all -- no autosave, no schnapps or bed save, no
+-- menu save, and none of the mod's own saves -- so a world the players went back to stays as it is while new builds are tried.
+-- A named script save lock (the joiner's own kind, WO-122 phase 2): a load wipes every lock, so it is added again after each load
+-- (WO-201's after-load list) and once when switched on; never re-added in between (each refused add costs an engine error line).
+--   FS-NOSAVE on|off lock=<added|refused|removed>
+KCD2MP.fsNoSave = KCD2MP.fsNoSave or { on = true, gen = -1, lockName = "kcdmp_saving_off", lockText = "Saving is off (mod menu: Saving off)" }
+
+local function fsnsApply(why)
+    local N = KCD2MP.fsNoSave
+    if not (Game and Game.AddSaveLock and Game.RemoveSaveLock) then return false end
+    if N.on then
+        local ok, r = pcall(Game.AddSaveLock, N.lockName, N.lockText)
+        N.gen = W201 and W201.lockGen and W201.lockGen.n or N.gen
+        mp_log(string.format("FS-NOSAVE on lock=%s why=%s", (ok and r == true) and "added" or ("held already " .. tostring(ok) .. "/" .. tostring(r)), tostring(why)))
+    else
+        local ok, r = pcall(Game.RemoveSaveLock, N.lockName)
+        mp_log(string.format("FS-NOSAVE off lock=removed (%s/%s) why=%s", tostring(ok), tostring(r), tostring(why)))
+    end
+    return true
+end
+
+function KCD2MP_SetSavingOff(arg)
+    local N = KCD2MP.fsNoSave
+    local v = KCD2MP_Wo122ParseBool(arg)
+    if v == "bad" then mp_log("mp_saving_off: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+    if v ~= nil and v ~= N.on then N.on = v; fsnsApply("switch") elseif v == nil then fsnsApply("asked") end
+    return true
+end
+pcall(System.AddCCommand, "mp_saving_off", "KCD2MP_SetSavingOff(%line)", "on = this game does not save at all (no autosave, no manual save) while the mod is tested")
+
+-- The mod's own saves ask here too (KCD2MP_W178RequestSave): false while saving is off.
+function KCD2MP_FsSavingAllowed(why)
+    if not KCD2MP.fsNoSave.on then return true end
+    mp_log("FS-NOSAVE refused the mod's save why=" .. tostring(why))
+    pcall(KCD2MP_ShowInteractionMsg, "Co-op: " .. KCD2MP.fsNoSave.lockText)
+    return false
+end
+
+do
+    W201.afterLoad = W201.afterLoad or {}
+    table.insert(W201.afterLoad, function(why) if KCD2MP.fsNoSave.on then fsnsApply("after-load " .. tostring(why)) end end)
 end
 
 do

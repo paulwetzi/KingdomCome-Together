@@ -157,7 +157,7 @@ do
     local b = lastLog("WO154-BUILD") or ""
     check("a: WO154-BUILD logged once", logCount("WO154-BUILD") == 1, logCount("WO154-BUILD"))
     -- WO-167 FT1: the session's fast travel is ON by default now (0.45.0 shipped it off)
-    for _, kv in ipairs({ "menu=on", "menu_key=insert", "name_badges=on", "ping_line=on", "clean_screen=off", "fast_travel=on", "items=29" }) do
+    for _, kv in ipairs({ "menu=on", "menu_key=insert", "name_badges=on", "ping_line=on", "clean_screen=off", "fast_travel=on", "items=30" }) do
         check("a: the build line says " .. kv, b:find(kv, 1, true) ~= nil, b)
     end
     check("a: w154_menu_cfg fast_travel=on told to the agent at load", evts("w154_menu_cfg")[1] == "fast_travel=on", evts("w154_menu_cfg")[1])
@@ -324,12 +324,12 @@ do
     key("kcd2mp_menu_toggle"); frame()
     local n, sel = #M.ITEMS, 0
     for i = 1, n do if M.selectable(i) then sel = sel + 1 end end
-    check("d: 29 items, 27 that can be chosen (the fixed-soul build's own figure and voice, version and connection are information; WO-164 added the partner pin, WO-171 the marker style, WO-174 the weapons repair, WO-178 the quicksave setting, its key and Save now, WO-211 the link hold's Leave, the modified build the character window, WO-212 the crime clear, the crime switch and the horse)", n == 29 and sel == 27, n .. "/" .. sel)
+    check("d: 30 items, 28 that can be chosen (the fixed-soul build's own figure, saving off and voice, version and connection are information; WO-164 added the partner pin, WO-171 the marker style, WO-174 the weapons repair, WO-178 the quicksave setting, its key and Save now, WO-211 the link hold's Leave, the modified build the character window, WO-212 the crime clear, the crime switch and the horse)", n == 30 and sel == 28, n .. "/" .. sel)
     local mark = #LOG
     NOW = NOW + 0.1
     key("kcd2mp_menu_up")
-    check("d: PgUp on the first wraps to the last that can be chosen (not an information row)", M.menu.sel == 27 and M.ITEMS[27].id == "report"
-        and logCount("MP-MENU select 27 report", mark) == 1, M.menu.sel)
+    check("d: PgUp on the first wraps to the last that can be chosen (not an information row)", M.menu.sel == 28 and M.ITEMS[28].id == "report"
+        and logCount("MP-MENU select 28 report", mark) == 1, M.menu.sel)
     NOW = NOW + 0.1
     key("kcd2mp_menu_down")
     check("d: PgDn on the last wraps to the first", M.menu.sel == 1, M.menu.sel)
@@ -339,7 +339,7 @@ do
     DRAWS = {}; frame()
     check("d: the marker follows the choice, with its explanation", drawn("> Clean screen: Off") ~= nil and drawn("  Partner's name badge: On") ~= nil
         and drawn("Hides everything the mod draws") ~= nil)
-    check("d: mp_menu select 28 (the version) is refused", KCD2MP_W154Menu("select 28") == false and M.menu.sel == 4)
+    check("d: mp_menu select 29 (the version) is refused", KCD2MP_W154Menu("select 29") == false and M.menu.sel == 4)
     check("d: mp_menu select fast_travel", KCD2MP_W154Menu("select fast_travel") == true and M.ITEMS[M.menu.sel].id == "fast_travel")
     check("d: mp_menu select 2", KCD2MP_W154Menu("select 2") == true and M.menu.sel == 2)
     check("d: no Lua errors", #ERRS == 0, ERRS[1])
@@ -674,12 +674,12 @@ do
     local st = lastLog("MP-MENU status") or ""
     local n = 0
     for _ in st:gmatch("%d+:[%w_]+=") do n = n + 1 end
-    check("j: the status line has every item with its whose", n == 29 and st:find("2:name_badges=on(own)", 1, true) ~= nil
-        and st:find("fast_travel=off(host)", 1, true) ~= nil and st:find("24:unstuck=action(help)", 1, true) ~= nil
+    check("j: the status line has every item with its whose", n == 30 and st:find("2:name_badges=on(own)", 1, true) ~= nil
+        and st:find("fast_travel=off(host)", 1, true) ~= nil and st:find("25:unstuck=action(help)", 1, true) ~= nil
         and st:find("5:partner_marker=on(own)", 1, true) ~= nil and st:find("6:marker_style=on(own)", 1, true) ~= nil
-        and st:find('28:version="0.45.0"(info)', 1, true) ~= nil and st:find("29:connection=", 1, true) ~= nil and st:find("25:leave_world=action(help)", 1, true) ~= nil
-        and st:find("26:repair_combat=action(help)", 1, true) ~= nil and st:find("16:quicksave=on(host)", 1, true) ~= nil
-        and st:find("21:quicksave_key=home(own)", 1, true) ~= nil and st:find("23:save_now=action(help)", 1, true) ~= nil, st)
+        and st:find('29:version="0.45.0"(info)', 1, true) ~= nil and st:find("30:connection=", 1, true) ~= nil and st:find("26:leave_world=action(help)", 1, true) ~= nil
+        and st:find("27:repair_combat=action(help)", 1, true) ~= nil and st:find("17:quicksave=on(host)", 1, true) ~= nil
+        and st:find("22:quicksave_key=home(own)", 1, true) ~= nil and st:find("24:save_now=action(help)", 1, true) ~= nil, st)
     check("j: a bad verb shows the usage", KCD2MP_W154Menu("dance") == false and lastLog("mp_menu: expected open|close|up|down|change|status|select") ~= nil)
     check("j: mp_menu close", KCD2MP_W154Menu("close") == true and M.menu.open == false and logCount("MP-MENU close (by console)", mark) == 1)
     check("j: no Lua errors", #ERRS == 0, ERRS[1])

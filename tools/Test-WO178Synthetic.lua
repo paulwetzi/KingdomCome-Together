@@ -79,6 +79,9 @@ end
 -- @@KDCMP@@
 
 local RESULTS = {}
+-- the fixed-soul build ships "Saving off (testing)" ON; these checks are about the saves themselves
+if KCD2MP and KCD2MP.fsNoSave then KCD2MP.fsNoSave.on = false end
+
 local function check(name, ok, detail)
     RESULTS[#RESULTS + 1] = (ok and "PASS  " or "FAIL  ") .. name .. (detail and ("  [" .. tostring(detail) .. "]") or "")
 end
