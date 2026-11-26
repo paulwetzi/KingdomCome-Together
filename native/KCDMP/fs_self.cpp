@@ -245,7 +245,7 @@ void lip_tick(uint32_t copyEid) {
 // On by default (two-PC test v28/v29: two dialogues, the stand-in wore the figure's dress, both ended clean, the copy intact);
 // research: "twinlook on|off".
 //   FS-TWIN <twin> eid=0x.. remade from <copy> -> ok|fault|refused (<why>)
-bool g_twinOn = true;
+bool g_twinOn = false;   // OFF again (field 2026-11-26, -15): the remake left the joiner's dialogue camera black -- it hangs on the stand-in
 uint32_t g_twinDone = 0, g_twinMade = 0, g_twinRefused = 0;
 constexpr size_t kActorRemake = 0x398;
 constexpr uintptr_t kRemakeRva = 0x9D3C0;   // EntityModule.dll, the C_Actor virtual read in this build

@@ -22140,7 +22140,14 @@ function KCD2MP_FsSelfTick(gen)
     -- the camera away from the eyes counts after 3 ticks in a row (a teleport moves it for a moment)
     if fssOwnEyes() then S.farTicks = 0 else S.farTicks = (S.farTicks or 0) + 1 end
     local view = (talking or KCD2MP.cutsceneActive == true or S.farTicks >= 3) and "other" or "own"
-    if view == "own" then
+    -- a story cutscene does not draw the copy (field 2026-11-26: no figure at all on the host's screen) -- Henry as he is there
+    if KCD2MP.cutsceneActive == true and not talking then view = "cutscene" end
+    if view == "cutscene" then
+        fssHenryShow()
+        local hid = false
+        pcall(function() hid = e:IsHidden() == true end)
+        if not hid then pcall(function() e:Hide(1) end) end
+    elseif view == "own" then
         pcall(function() player:DrawSlot(0, 1) end)
         for _, n in ipairs(pname and S.names[pname] or {}) do
             if not FSS_KEEP[n] and not S.hidden[n] then
@@ -33878,10 +33885,21 @@ end
 pcall(System.AddCCommand, "mp_saving_off", "KCD2MP_SetSavingOff(%line)", "on = this game does not save at all (no autosave, no manual save) while the mod is tested")
 
 -- The mod's own saves ask here too (KCD2MP_W178RequestSave): false while saving is off.
+-- A save the session needs (the world a joiner loads: why "world:...") goes through -- the lock is lifted for 20 s and put back
+-- (field 2026-11-26: the join waited forever for the host's world save). Every other one is refused, told at most once a minute.
 function KCD2MP_FsSavingAllowed(why)
-    if not KCD2MP.fsNoSave.on then return true end
+    local N = KCD2MP.fsNoSave
+    if not N.on then return true end
+    if string.find(tostring(why), "^world") then
+        if Game and Game.RemoveSaveLock then pcall(Game.RemoveSaveLock, N.lockName) end
+        N.passGen = (N.passGen or 0) + 1
+        local g = N.passGen
+        Script.SetTimer(20000, function() if N.on and N.passGen == g then fsnsApply("after the session's save") end end)
+        mp_log("FS-NOSAVE let the session's save through why=" .. tostring(why) .. " (the lock is back in 20 s)")
+        return true
+    end
     mp_log("FS-NOSAVE refused the mod's save why=" .. tostring(why))
-    pcall(KCD2MP_ShowInteractionMsg, "Co-op: " .. KCD2MP.fsNoSave.lockText)
+    if os.clock() - (N.toldAt or -100) > 60 then N.toldAt = os.clock(); pcall(KCD2MP_ShowInteractionMsg, "Co-op: " .. N.lockText) end
     return false
 end
 

@@ -415,6 +415,16 @@ do
     noErrs("F")
 end
 
+-- the fixed-soul build's Saving off: the session's world save (a join's) goes through, every other mod save is refused
+do
+    KCD2MP.fsNoSave.on = true
+    local world = KCD2MP_FsSavingAllowed("world:identify")
+    local other = KCD2MP_FsSavingAllowed("menu")
+    KCD2MP.fsNoSave.on = false
+    check("NS1: Saving off lets the join's world save through", world == true, tostring(world))
+    check("NS2: Saving off refuses the mod's other saves", other == false, tostring(other))
+end
+
 check("Z: Game.SaveGameViaResting was never called in the whole run", RESTSAVES == 0)
 
 OUT = table.concat(RESULTS, "\n")

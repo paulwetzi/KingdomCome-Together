@@ -57,17 +57,16 @@ shift does; the speed stays, the line starts about 54 ms later. For tuning by ea
 (`VoicePreset`). The native log shows `FS-VOICE armed` and, per preset change, how many of Henry's lines were shifted.
 
 
-### Your figure in dialogues
+### Your figure in dialogues (off for now)
 
-A dialogue's shots do not film Henry but a stand-in the game makes for each conversation (`DialogTwin_<player>`). The mod's DLL
-remakes that stand-in as your chosen figure the moment it appears (C_Actor's own setup, called once more with your figure as the
-source): the dialogue still drives it, so gestures and lips follow the conversation. The native log shows
-`FS-TWIN DialogTwin_... remade from kcd2mp_200 -> ok`. Research: `twinlook off|on`.
+A dialogue's shots do not film Henry but a stand-in the game makes for each conversation (`DialogTwin_<player>`). The DLL can remake
+that stand-in as your chosen figure (`twinlook on` in the research file), but it is OFF by default: in a real session the dialogue
+camera, which hangs on the stand-in, went black. Story cutscenes show Henry for now.
 
 ### Saving off (testing)
 
 **Saving off (testing)** (menu group Display, on by default in this build) stops your game from saving at all -- no autosave, no
-manual save, none of the mod's own saves -- so a world you went back to stays as it is while new builds are tried.
+manual save, none of the mod's own saves except the world a joiner loads -- so a world you went back to stays as it is while new builds are tried.
 
 ### The menu
 
