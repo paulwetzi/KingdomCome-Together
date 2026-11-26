@@ -51,7 +51,7 @@ Script = mkstub()
 Script.SetTimer = function(ms, f) TIMERS[#TIMERS + 1] = { ms = ms, f = f, at = NOW } end
 Game = mkstub(); AI = mkstub(); Sound = mkstub(); Physics = mkstub(); Terrain = mkstub()
 UIAction = mkstub()
-UIAction.CallFunction = function(panel, inst, fn, text) UICALLS[#UICALLS + 1] = { panel = panel, fn = fn, text = tostring(text) } end
+UIAction.CallFunction = function(panel, inst, fn, text, more) UICALLS[#UICALLS + 1] = { panel = panel, fn = fn, text = tostring(text), more = tostring(more) } end
 Calendar = { GetWorldTime = function() return 12345 end, SetWorldTime = function() end }
 
 P = { dialog = false, dead = false, ko = false, stood = 0 }
@@ -188,6 +188,20 @@ do
     key("kcd2mp_menu_toggle")
     check("b: Insert opens it (no session needed)", M.menu.open == true and logCount("MP-MENU open by=key", mark) == 1, lastLog("MP-MENU"))
     check("b: the game's own handler ran for the press and the release (nothing blocked)", GAME_ONACTION - g0 == 2, GAME_ONACTION - g0)
+    -- fixed-soul build: by default the menu is the game's parchment panel; the plain text below is its fallback (mp_menu_plain on)
+    UICALLS, DRAWS = {}, {}
+    frame()
+    local shown = nil
+    for _, c in ipairs(UICALLS) do if c.fn == "ShowTutorial" and c.text == "kcd2mp_menu" then shown = c end end
+    check("b: the panel shows the menu", shown ~= nil and shown.more:find("Kingdom Come: Together", 1, true) ~= nil, shown and shown.more)
+    check("b: ...the chosen row marked, a group and the keys", shown ~= nil and shown.more:find("&gt; Change character", 1, true) ~= nil
+        and shown.more:find("Display", 1, true) ~= nil and shown.more:find("PgUp / PgDn choose", 1, true) ~= nil)
+    check("b: ...and no plain text under it", #DRAWS == 0, #DRAWS)
+    local pushes = #UICALLS
+    frames(3)
+    check("b: the same page is never pushed again", #UICALLS == pushes, #UICALLS - pushes)
+    KCD2MP_SetMenuPlain("on")
+    check("b: mp_menu_plain on hides the panel", UICALLS[#UICALLS].fn == "HideTutorial" and UICALLS[#UICALLS].text == "kcd2mp_menu")
     DRAWS = {}
     frame()
     local title = drawn("Kingdom Come: Together -- mod menu (Insert to close)")

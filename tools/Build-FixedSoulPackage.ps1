@@ -7,7 +7,7 @@
     release\FixedSoul and release\KCT-FixedSoul-0.65.2.zip. Both PCs must get the SAME zip: its build id is part of the connection check.
 #>
 [CmdletBinding()]
-param([string] $BuildId = 'fixedsoul-0.65.2-1')
+param([string] $BuildId = 'fixedsoul-0.65.2-7')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $out = Join-Path $root 'release\FixedSoul'

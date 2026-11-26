@@ -9950,6 +9950,10 @@ function KCD2MP_NpcPuppetTick(arg, gen)
     end
 
     local any = false
+    -- Fixed-soul build: at most KCD2MP.NPC_RELEASE_PER_TICK silent puppets are let go per tick (50 ms). When the agent went away all of
+    -- them went silent together, and 99 copies handed back to their own brains in one frame were followed by the engine's AI thread
+    -- crashing (XGenAIModule, a null read) 5 s later, twice in five rejoins. The rest go on the next ticks: 99 take about a second.
+    local released = 0
     for name, p in pairs(KCD2MP.npcPuppets) do
         pcall(function()
             -- Release on silence: the engine restores the NPC to its own
@@ -9958,8 +9962,9 @@ function KCD2MP_NpcPuppetTick(arg, gen)
             -- The backlog fix: while the agent's word is fresh, the stream is silent when the agent says so
             -- (it sees the samples arrive; this mod sees them only once the agent's queue hands them on);
             -- its own 3 s clock rule decides when the agent is gone or mp_npc_catchup is off.
-            if KCD2MP_NpcSilenceRelease(name, p, now)
+            if released < (KCD2MP.NPC_RELEASE_PER_TICK or 6) and KCD2MP_NpcSilenceRelease(name, p, now)
                and not (KCD2MP_W138KeepSilent and KCD2MP_W138KeepSilent(name)) then
+                released = released + 1
                 ns.silent[name] = nil
                 KCD2MP_NpcReplicaDemote(name, "silence")   -- WO-104: the NPC returns before the puppet is dropped
                 KCD2MP_NpcNativeSync(name, p, nil, false, "silence")   -- WO-118
@@ -28948,6 +28953,7 @@ do
         if not mn.open then return false end
         mn.open = false
         mn.gen = mn.gen + 1   -- the running frame chain ends at its next frame
+        if KCD2MP_MenuPanelHide then pcall(KCD2MP_MenuPanelHide) end   -- fixed-soul build: the parchment panel goes with it
         mp_log("MP-MENU close (" .. tostring(why) .. ")")
         return true
     end
@@ -28961,6 +28967,81 @@ do
             return false
         end
         return true
+    end
+
+    -- ===== Fixed-soul build: the menu on the game's own parchment panel =====
+    -- System.DrawText draws white text only (no box, no colour: WO-6). The game's tutorial panel -- the gilded frame around
+    -- parchment the dice board uses -- takes HTML, so the menu and the character window are pushed there: a header, the rows
+    -- around the chosen one, its help and the keys. A push replays the panel's fade, so the same page is never pushed twice and a
+    -- new page at most every PANEL_GAP_S (the frame chain calls in every frame, so the newest page always follows). The plain text
+    -- stays as the fallback (mp_menu_plain on).
+    M.panel = M.panel or { id = "kcd2mp_menu", html = nil, at = -1e9, plain = false }
+    local PANEL_GAP_S, PANEL_ROWS = 0.15, 11   -- 11 rows keep the help and the keys inside the panel's height
+    local PC = { ink = "#2a2018", dim = "#7a6a4f", head = "#96691a", sel = "#8a1f14" }
+    local function pesc(s) return (tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+    local function pfont(s, colour, size) return "<font size='" .. size .. "' color='" .. colour .. "'>" .. s .. "</font>" end
+
+    -- v = { title, sub, rows = { { text, sel, head, dim } }, help = { lines }, foot }. True = the panel shows it.
+    function KCD2MP_MenuPanel(v)
+        local P = M.panel
+        if P.plain then return false end
+        local rows, selAt = v.rows or {}, 1
+        for i, r in ipairs(rows) do if r.sel then selAt = i end end
+        local first = math.max(1, math.min(selAt - math.floor(PANEL_ROWS / 2), #rows - PANEL_ROWS + 1))
+        local last = math.min(#rows, first + PANEL_ROWS - 1)
+        -- the game's font has no arrows (a box stood where one was): "&gt;" marks the chosen row, words say "more"
+        local h = pfont(pesc(v.title), PC.head, 21) .. "<br/>"
+        if v.sub and v.sub ~= "" then h = h .. pfont(pesc(v.sub), PC.dim, 15) .. "<br/>" end
+        h = h .. pfont(first > 1 and "(more above)" or "&nbsp;", PC.dim, 13) .. "<br/>"
+        for i = first, last do
+            local r = rows[i]
+            if r.head then h = h .. pfont(pesc(r.text), PC.head, 16) .. "<br/>"
+            elseif r.sel then h = h .. pfont("&gt; " .. pesc(r.text), PC.sel, 18) .. "<br/>"
+            else h = h .. pfont("&nbsp;&nbsp;&nbsp;" .. pesc(r.text), r.dim and PC.dim or PC.ink, 17) .. "<br/>" end
+        end
+        h = h .. pfont(last < #rows and "(more below)" or "&nbsp;", PC.dim, 13) .. "<br/>"
+        if v.help and #v.help > 0 then h = h .. pfont(pesc(table.concat(v.help, " ")), PC.ink, 15) .. "<br/>" end
+        if v.foot then h = h .. pfont(pesc(v.foot), PC.dim, 14) end
+        if h == P.html then return true end
+        local now = os.clock()
+        if now - P.at < PANEL_GAP_S then return P.html ~= nil end
+        P.html, P.at = h, now
+        pcall(function() UIAction.CallFunction("hud", -1, "HideTutorial", P.id) end)
+        local ok = pcall(function() UIAction.CallFunction("hud", -1, "ShowTutorial", P.id, h, 3600000, false, 9, 0, false, "") end)
+        if not ok then P.html = nil; return false end
+        return true
+    end
+
+    function KCD2MP_MenuPanelHide()
+        local P = M.panel
+        if not P.html then return end
+        P.html = nil
+        pcall(function() UIAction.CallFunction("hud", -1, "HideTutorial", P.id) end)
+    end
+
+    function KCD2MP_SetMenuPlain(arg)
+        local v = KCD2MP_Wo122ParseBool and KCD2MP_Wo122ParseBool(arg)
+        if v == "bad" then mp_log("mp_menu_plain: expected on|off, got '" .. tostring(arg) .. "'"); return false end
+        if v ~= nil then M.panel.plain = v end
+        if M.panel.plain then KCD2MP_MenuPanelHide() end
+        mp_log("MP-MENU plain=" .. (M.panel.plain and "on" or "off") .. " -- " .. (M.panel.plain and "white text" or "the game's parchment panel"))
+        return true
+    end
+    pcall(System.AddCCommand, "mp_menu_plain", "KCD2MP_SetMenuPlain(%line)", "on = the mod menu as plain white text, off = on the game's parchment panel")
+
+    function M.panelView(key)
+        local rows, group = {}, nil
+        for i, it in ipairs(M.ITEMS) do
+            if it.group ~= group then group = it.group; rows[#rows + 1] = { text = group, head = true } end
+            local _, locked = M.valueOf(it)
+            rows[#rows + 1] = { text = (M.rowText(it, false):gsub("^%s+", ""):gsub("%s+%[set by the host%]", " (host)")), sel = i == M.menu.sel, dim = locked }
+        end
+        local help = {}
+        local sel = M.ITEMS[M.menu.sel]
+        if sel and sel.help then help[#help + 1] = sel.help end
+        if M.note and (os.clock() - M.note.at) < 8 then help[#help + 1] = M.note.text end
+        return { title = "Kingdom Come: Together", sub = M.clean and "Clean screen is on: the mod shows nothing else." or "Mod menu",
+                 rows = rows, help = help, foot = "PgUp / PgDn choose   End change   " .. key .. " close" }
     end
 
     function M.draw()
@@ -28978,6 +29059,7 @@ do
         local y = math.max(math.floor(M.vp.h * L.yFrac), 165)
         local key = M.KEY_NAMES[M.menuKey] or "Insert"
         if KCD2MP_LookDraw and KCD2MP_LookDraw(x, y, key) then return end   -- modified build: the character window
+        if KCD2MP_MenuPanel(M.panelView(key)) then return end   -- fixed-soul build: on the parchment panel
         System.DrawText(x, y, "Kingdom Come: Together -- mod menu (" .. key .. " to close)", L.title)
         y = y + L.line + 6
         if M.clean then
@@ -29301,6 +29383,21 @@ do
             end
         elseif L.previewEnt then
             removePreview()
+        end
+        if KCD2MP_MenuPanel then   -- fixed-soul build: on the parchment panel
+            local rows, help = {}, {}
+            for i, r in ipairs(L.rows) do
+                local mark = ((r.t == "s" and r.k == L.cur) or (r.t == "r" and L.cur == "")) and "  [active]" or ""
+                rows[#rows + 1] = { text = tostring(r.label) .. mark, sel = i == L.sel }
+            end
+            if sel and sel.t == "s" and string.find(tostring(sel.label), "(!)", 1, true) then
+                help[#help + 1] = "(!) Story figure, guard or enemy: the original can stand in the world as well."
+            end
+            if L.note then help[#help + 1] = L.note end
+            if KCD2MP_MenuPanel({ title = "Change character", sub = L.waiting and "Loading..." or tostring(L.title), rows = rows, help = help,
+                                  foot = "PgUp / PgDn select   End confirm   " .. key .. " close" }) then
+                return true
+            end
         end
         System.DrawText(x, y, "Change character (" .. key .. " closes)", S.title)
         y = y + S.line + 6

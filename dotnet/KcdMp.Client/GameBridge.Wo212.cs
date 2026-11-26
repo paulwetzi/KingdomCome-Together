@@ -97,7 +97,7 @@ public partial class GameBridge
     }
 
     private Task FsHorseShowAsync(byte owner, FsHorse h) => ExecLuaAsync(FormattableString.Invariant(
-        $"if KCD2MP_W214PeerHorse then KCD2MP_W214PeerHorse(\"{owner}\", {h.X:F2}, {h.Y:F2}, {h.Z:F2}, {h.Rot:F3}, \"{h.State}\") end"));
+        $"if KCD2MP_FsHorsePeer then KCD2MP_FsHorsePeer(\"{owner}\", {h.X:F2}, {h.Y:F2}, {h.Z:F2}, {h.Rot:F3}, \"{h.State}\") end"));
 }
 
 /// <summary>Fixed-soul horse: the one text a called horse crosses the wire as. Checked field by field on both ends.</summary>

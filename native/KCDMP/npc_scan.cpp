@@ -10,6 +10,8 @@
 #include <cmath>
 #include <cstring>
 #include <cctype>
+#include <algorithm>
+#include <vector>
 
 namespace kcdmp::npcscan {
 namespace {
@@ -221,6 +223,9 @@ bool scan(const Anchor* anchors, int anchorCount, float radius, ScanResult* out)
 
     uint32_t total = 0, vptrOk = 0, vptrBad = 0, nameRejects = 0, droppedCount = 0;
     size_t budget = kMaxReplyBytes;
+    struct Candidate { NpcEntry e; float d2; size_t bytes; };
+    std::vector<Candidate> candidates;
+    candidates.reserve(256);
     bool truncated = false;
     bool trustDecided = false;
 
@@ -248,33 +253,38 @@ bool scan(const Anchor* anchors, int anchorCount, float radius, ScanResult* out)
         float x, y, z, yaw;
         if (!read_pos_yaw(entity, &x, &y, &z, &yaw)) continue;
 
-        bool inRange = false;
+        float nearest = -1.0f;
         for (int i = 0; i < anchorCount; ++i) {
             const float dx = x - anchors[i].x, dy = y - anchors[i].y;
-            if (dx * dx + dy * dy <= radius * radius) { inRange = true; break; }
+            const float d2 = dx * dx + dy * dy;
+            if (d2 <= radius * radius && (nearest < 0.0f || d2 < nearest)) nearest = d2;
         }
-        if (!inRange) continue;
+        if (nearest < 0.0f) continue;
 
         char name[60]{};
         if (!read_name_safe(entity, name, sizeof(name))) { ++nameRejects; continue; }
 
-        // WO-103 Phase 1: once the byte budget is spent, keep walking (the
-        // iterator is already walking every entity regardless -- an early
-        // `break` here used to also cut totalWalked/vptrOk/nameRejects short
-        // for a truncated scan, silently under-reporting them) and count
-        // every further match instead of dropping it silently.
-        const size_t entryBytes = 1 /*nameLen*/ + std::strlen(name) + 16 /*x,y,z,yaw*/ + 1 /*isHorse*/;
-        if (truncated || entryBytes > budget) { truncated = true; ++droppedCount; continue; }
-        budget -= entryBytes;
-
-        NpcEntry e{};
-        std::strncpy(e.name, name, sizeof(e.name) - 1);
-        e.x = x; e.y = y; e.z = z; e.yaw = yaw;
-        e.isHorse = isHorse ? 1 : 0;
-        out->entries.push_back(e);
+        Candidate c{};
+        std::strncpy(c.e.name, name, sizeof(c.e.name) - 1);
+        c.e.x = x; c.e.y = y; c.e.z = z; c.e.yaw = yaw;
+        c.e.isHorse = isHorse ? 1 : 0;
+        c.d2 = nearest;
+        c.bytes = 1 /*nameLen*/ + std::strlen(name) + 16 /*x,y,z,yaw*/ + 1 /*isHorse*/;
+        candidates.push_back(c);
     }
 
     release_iter();
+
+    // Fixed-soul build: the byte budget is filled nearest-first. Walked in the engine's own order, a crowded town (1,034 bodies
+    // within 300 m, room for ~208) streamed bodies 265 m away and left the ones beside the players out: their copies went
+    // silent, were released and restarted standing -- seated guests stood on their benches. WO-103 Phase 1 still holds:
+    // every match is counted, the ones left out as dropped.
+    std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) { return a.d2 < b.d2; });
+    for (const Candidate& c : candidates) {
+        if (truncated || c.bytes > budget) { truncated = true; ++droppedCount; continue; }
+        budget -= c.bytes;
+        out->entries.push_back(c.e);
+    }
 
     if (!trustDecided) return fail(kGEnvUnmapped);   // iterator produced nothing at all -- cannot validate, refuse rather than report an empty world as truth
 
