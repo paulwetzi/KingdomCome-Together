@@ -22041,6 +22041,58 @@ local function fssOwnEyes()
     return own
 end
 
+-- The copy's hands hold what this player's hands hold (the main hand 0: a weapon, a tool; the off hand 1: the torch, a shield) -- the
+-- partner figure's own ways (WO-214 F, WO-136 phase 5): an item of that class in its inventory (made when missing), the game's equip
+-- and draw for the main hand (DrawFromInventory when that did not take), DrawFromInventory for the off hand. Only while the copy is
+-- drawn: its items are entities of their own and would float beside the player's eyes in first person, so they go back (no animation)
+-- when the view is his own again. Asked again at most every 1.5 s per hand.
+--   FS-SELF hand=<0|1> want=<class|-> held=<class|-> -> <how>
+local function fssHandItem(e, cls)
+    local it = nil
+    pcall(function() it = e.inventory and e.inventory:FindItem(cls) end)
+    if not it and e.inventory then
+        pcall(function() e.inventory:CreateItem(cls, 1, 1) end)
+        pcall(function() it = e.inventory:FindItem(cls) end)
+    end
+    return it
+end
+
+local function fssHands(e, now, show)
+    local S, w = KCD2MP.fsSelf, KCD2MP.w136
+    if not (w and w.handClass and e and e.human) then return end
+    S.hands = S.hands or { [0] = { at = -100, tries = 0 }, [1] = { at = -100, tries = 0 } }
+    for hand = 0, 1 do
+        local h = S.hands[hand]
+        local want = show and w.handClass(player, hand) or nil
+        local held = w.handClass(e, hand)
+        if want ~= h.want then h.want, h.tries, h.at = want, 0, -100 end
+        if held ~= want and now - h.at >= 1.5 and h.tries < 4 then
+            h.at, h.tries = now, h.tries + 1
+            local how
+            if not want then
+                if hand == 0 then pcall(function() e.human:HolsterToInventory(0, false) end); pcall(function() e.human:HolsterWeapon() end)
+                else pcall(function() e.human:HolsterToInventory(1, false) end) end
+                how = "put away"
+            else
+                local it = fssHandItem(e, want)
+                if not it then how = "no item"
+                else
+                    if held then pcall(function() e.human:HolsterToInventory(hand, false) end) end
+                    if hand == 0 and h.tries <= 2 then
+                        pcall(function() e.actor:EquipInventoryItem(it) end)
+                        pcall(function() e.human:DrawWeapon() end)
+                        how = "equipped and drawn"
+                    else
+                        pcall(function() e.human:DrawFromInventory(it, hand, true) end)
+                        how = "drawn from the inventory"
+                    end
+                end
+            end
+            mp_log(string.format("FS-SELF hand=%d want=%s held=%s -> %s", hand, tostring(want or "-"), tostring(held or "-"), how))
+        end
+    end
+end
+
 -- The chain runs while a figure is chosen and mp_own_figure is on (KCD2MP_FsSelfStart), 10 times a second; it ends itself otherwise.
 function KCD2MP_FsSelfTick(gen)
     local S = KCD2MP.fsSelf
@@ -22098,6 +22150,7 @@ function KCD2MP_FsSelfTick(gen)
         pcall(function() player:DrawSlot(0, 0) end)
         pcall(function() e:DrawSlot(0, 1) end)
     end
+    fssHands(e, now, view == "other")
     if view ~= S.view then mp_log("FS-SELF view=" .. view); S.view = view end
 end
 

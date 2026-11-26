@@ -42,7 +42,8 @@ With **My figure on my screen** on (menu group Display, on by default) you no lo
 - In dialogues and cutscenes Henry is not drawn at all. A copy of you as the chosen figure stands in his place. The DLL moves it
   every frame with your own position and walk, the same way your partner's screen moves your figure.
 
-When Henry speaks, the copy's lips move with the same line (the native log shows `FS-LIPS the copy speaks ...`). It does not
+While the copy is shown it holds what you hold (weapon or tool in the main hand, torch or shield in the other); it puts them
+away when the view is your own eyes again. When Henry speaks, the copy's lips move with the same line (the native log shows `FS-LIPS the copy speaks ...`). It does not
 gesture. `kcd.log` shows `FS-SELF spawned`, `FS-SELF view=own|other`, the native log `FS-SELF bind`. `mp_own_figure off` turns it
 off.
 
@@ -74,7 +75,7 @@ says `SPAWN MISMATCH`, the game rejected this figure. Choose another one.
 - Entries marked **(!)** are story figures, guards or enemies. Their own AI is paused so they do nothing by themselves.
   Because of that they may not get up by themselves after a knockout.
 - NPC names in the window come from the game's German text table.
-- Your own figure in dialogues and cutscenes only stands, walks and moves its lips: no gestures, no story animations.
+- Your own figure in dialogues and cutscenes stands, walks, moves its lips and holds your items: no gestures, no story animations.
 
 ## Fixed mapping by file (optional)
 
