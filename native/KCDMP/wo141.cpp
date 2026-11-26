@@ -1261,6 +1261,7 @@ void research_watch() {
         else if (k >= 2 && !std::strcmp(verb, "vtune")) fsvoice::research_tune(a1, k >= 3 ? rest : "");   // vtune <P> <Q> [lift] | off
         else if (k >= 2 && !std::strcmp(verb, "self")) fsself::research_set(a1);   // fixed-soul research: self <body>|off
         else if (k >= 2 && !std::strcmp(verb, "selfahead")) fsself::research_ahead(static_cast<float>(atof(a1)));
+        else if (k >= 2 && !std::strcmp(verb, "twinlook")) fsself::research_twin(std::strcmp(a1, "off") != 0);
         else if (k >= 2 && !std::strcmp(verb, "attach")) {   // fixed-soul research: attach <entity name> -- its character's attachments
             void* ae = entity_by_name(a1);
             if (ae) motion::attach_list(ae, a1); else logf("FS-ATTACH %s: no such entity", a1);

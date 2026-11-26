@@ -18,5 +18,6 @@ constexpr uint8_t kOpSelf = 241;
 constexpr uint8_t kOpAttachNames = 242;
 void research_set(const char* name);   // the research verb "self <body>|off"
 void research_ahead(float m);          // the research verb "selfahead <m>" (0 = in place)
+void research_twin(bool on);           // the research verb "twinlook on|off": the dialogue stand-in remade from the copy
 
 }  // namespace kcdmp::fsself

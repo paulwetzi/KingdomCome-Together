@@ -22155,10 +22155,15 @@ function KCD2MP_FsSelfTick(gen)
         if not hid then pcall(function() e:Hide(1) end) end
     else
         pcall(function() player:DrawSlot(0, 0) end)
+        -- a dialogue films the engine's stand-in, which the DLL remakes as the chosen figure (fs_self FS-TWIN): the copy stays hidden
         local hid = false
         pcall(function() hid = e:IsHidden() == true end)
-        if hid then pcall(function() e:Hide(0) end) end
-        pcall(function() e:DrawSlot(0, 1) end)
+        if talking then
+            if not hid then pcall(function() e:Hide(1) end) end
+        else
+            if hid then pcall(function() e:Hide(0) end) end
+            pcall(function() e:DrawSlot(0, 1) end)
+        end
     end
     fssHands(e, now, view == "other")
     if view ~= S.view then mp_log("FS-SELF view=" .. view); S.view = view end

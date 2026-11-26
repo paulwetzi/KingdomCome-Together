@@ -237,6 +237,54 @@ void lip_tick(uint32_t copyEid) {
     }
 }
 
+// The own figure in dialogues. A dialogue's shots film the engine's own stand-in for the player, "DialogTwin_<player>" (DialogModule's
+// C_DialogueTwinController::MakeTwin spawns it as an NPC), not the player: hiding Henry does nothing there. MakeTwin makes it look like
+// him through C_Actor's virtual at +0x398 (EntityModule 0x9D3C0 in this build): the stand-in takes the source actor's soul (+0x700), is
+// rebuilt from it (+0x758) and takes the source's equipment (+0x4C8). Called once more with the copy as the source, the stand-in is the
+// chosen figure; the dialogue keeps driving it (its gestures, its lips). Once per stand-in, only when the virtual is the analysed one.
+// On by default (two-PC test v28/v29: two dialogues, the stand-in wore the figure's dress, both ended clean, the copy intact);
+// research: "twinlook on|off".
+//   FS-TWIN <twin> eid=0x.. remade from <copy> -> ok|fault|refused (<why>)
+bool g_twinOn = true;
+uint32_t g_twinDone = 0, g_twinMade = 0, g_twinRefused = 0;
+constexpr size_t kActorRemake = 0x398;
+constexpr uintptr_t kRemakeRva = 0x9D3C0;   // EntityModule.dll, the C_Actor virtual read in this build
+
+void twin_tick(uint32_t copyEid) {
+    static double s_at = -1e9;
+    if (!g_twinOn) return;
+    const double now = npcdrive::now_s();
+    if (now - s_at < 0.2) return;
+    s_at = now;
+    void* pe = engine::entity_by_id(kPlayerEntity);
+    const char* pn = pe ? engine::entity_name(pe) : nullptr;
+    if (!pn) return;
+    char tn[128]{};
+    std::snprintf(tn, sizeof tn, "DialogTwin_%s", pn);
+    void* te = npcdrive::entity_by_name(tn);
+    if (!te) { g_twinDone = 0; return; }
+    const uint32_t teid = engine::entity_id(te);
+    if (teid == g_twinDone) return;
+    g_twinDone = teid;
+    void* ta = motion::actor_of(teid);
+    void* ca = motion::actor_of(copyEid);
+    HMODULE em = GetModuleHandleA("EntityModule.dll");
+    void* vt = nullptr; void* fn = nullptr;
+    const bool shaped = ta && ca && em && rdg(ta, 0, &vt) && vt && rdg(vt, kActorRemake, &fn)
+                        && reinterpret_cast<uintptr_t>(fn) == reinterpret_cast<uintptr_t>(em) + kRemakeRva;
+    if (!shaped) {
+        ++g_twinRefused;
+        logf("FS-TWIN %s eid=0x%X refused (twin actor %p, copy actor %p, virtual %p, expected EntityModule+0x%llX)", tn, teid, ta, ca, fn,
+             static_cast<unsigned long long>(kRemakeRva));
+        return;
+    }
+    using RemakeFn = void (*)(void* self, void* src);
+    KCDMP_FAULT_CALL(site, "fs_self::twin_remake");
+    const bool ok = fault::guarded(site, [&] { reinterpret_cast<RemakeFn>(fn)(ta, ca); });
+    if (ok) ++g_twinMade;
+    logf("FS-TWIN %s eid=0x%X remade from %s -> %s [n=%u]", tn, teid, g_name.c_str(), ok ? "ok" : "fault", g_twinMade);
+}
+
 void tick() {
     if (!g_on) return;
     localstate::LocalState ls{};
@@ -274,7 +322,7 @@ void tick() {
     }
     npcdrive::inject_sample(g_name.c_str(), sx, sy, ls.z, sr, ls.flags, ++g_seq, have2 ? &st2 : nullptr);
     ++g_samples;
-    if (g_bound) lip_tick(g_eid);
+    if (g_bound) { lip_tick(g_eid); twin_tick(g_eid); }
 }
 
 uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
@@ -307,14 +355,17 @@ uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t ca
 }
 
 int status(char* out, int n) {
-    return std::snprintf(out, static_cast<size_t>(n), "fsself on=%d name=%s bound=%d samples=%u binds=%u refused=%u lips=%d lip_starts=%u lip_stops=%u",
-                         g_on ? 1 : 0, g_name.c_str(), g_bound ? 1 : 0, g_samples, g_binds, g_bindRefused, g_lip.ok ? 1 : 0, g_lip.starts, g_lip.stops);
+    return std::snprintf(out, static_cast<size_t>(n), "fsself on=%d name=%s bound=%d samples=%u binds=%u refused=%u lips=%d lip_starts=%u lip_stops=%u twin=%d made=%u refused=%u",
+                         g_on ? 1 : 0, g_name.c_str(), g_bound ? 1 : 0, g_samples, g_binds, g_bindRefused, g_lip.ok ? 1 : 0, g_lip.starts, g_lip.stops,
+                         g_twinOn ? 1 : 0, g_twinMade, g_twinRefused);
 }
 
 const bool kReg = wo203::reg_op(kOpSelf, &op) && wo203::reg_op(kOpAttachNames, &op) && wo203::reg_tick("fsself", &tick)
                   && wo203::reg_status("fsself", &status);
 
 }  // namespace
+
+void research_twin(bool on) { g_twinOn = on; g_twinDone = 0; logf("FS-TWIN research: twinlook %s", on ? "on" : "off"); }
 
 void research_ahead(float m) { g_testAhead = (m > 0.0f && m < 5.0f) ? m : 0.0f; logf("FS-SELF research: the copy %.2f m ahead", g_testAhead); }
 
