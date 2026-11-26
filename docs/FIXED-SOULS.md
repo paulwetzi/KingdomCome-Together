@@ -49,8 +49,11 @@ off.
 
 ### Your voice
 
-**My voice** (menu group Display) raises Henry's own voice lines: Higher, Woman, Bright, or Deeper. Only you hear it. FMOD's own
-pitch shifter changes the pitch, not the speed. End in the menu steps to the next preset; it is kept in `mod-settings.json`
+**My voice** (menu group Display) turns Henry's own voice lines into a woman's voice: Woman, Woman brighter, Woman warmer, or
+Deeper. Only you hear it. A filter of the mod's own (`native/KCDMP/voice_shift.h`, a TD-PSOLA) raises the pitch (Woman: about
+137 Hz to 215 Hz) but the formants only a little (x1.2), so it does not sound like a sped-up small creature the way a plain pitch
+shift does; the speed stays, the line starts about 54 ms later. For tuning by ear the research file takes `vtune <pitch> <formants>`
+(and `vtune off`). End in the menu steps to the next preset; it is kept in `mod-settings.json`
 (`VoicePreset`). The native log shows `FS-VOICE armed` and, per preset change, how many of Henry's lines were shifted.
 
 ### The menu

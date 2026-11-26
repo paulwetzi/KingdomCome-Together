@@ -105,7 +105,7 @@ public partial class GameBridge
 
     // Fixed-soul build: the own voice. The preset is this player's (mod-settings.json "VoicePreset"); the DLL shifts Henry's lines
     // (native fs_voice.cpp, op 243). Pushed again every 10 s: a new game or DLL starts at "off".
-    private static readonly string[] FsVoicePresets = { "off", "higher", "woman", "bright", "deeper" };
+    private static readonly string[] FsVoicePresets = { "off", "woman", "bright", "warm", "deeper" };
     private const string FsVoiceSetting = "VoicePreset";
     private string? _fsVoice;
     private long _fsVoiceSentMs;

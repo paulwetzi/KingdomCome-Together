@@ -22164,9 +22164,9 @@ end
 
 -- ===== Fixed-soul build: the own voice (the agent keeps the preset, the DLL shifts Henry's lines) ==================================
 KCD2MP.fsVoice = KCD2MP.fsVoice or { preset = "off" }
-local FSV_NAMES = { off = "Henry (off)", higher = "Higher", woman = "Woman", bright = "Bright", deeper = "Deeper" }
+local FSV_NAMES = { off = "Henry (off)", woman = "Woman", bright = "Woman, brighter", warm = "Woman, warmer", deeper = "Deeper" }
 function KCD2MP_FsVoiceName(word) return FSV_NAMES[tostring(word)] or tostring(word) end
--- The agent: the preset in use ("off", "higher", "woman", "bright", "deeper"); armed = whether the DLL could hook the voice.
+-- The agent: the preset in use ("off", "woman", "bright", "warm", "deeper"); armed = whether the DLL could hook the voice.
 function KCD2MP_FsVoiceState(word, armed)
     KCD2MP.fsVoice.preset = FSV_NAMES[tostring(word)] and tostring(word) or "off"
     KCD2MP.fsVoice.armed = armed == true

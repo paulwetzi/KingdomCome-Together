@@ -7,10 +7,12 @@
 // (System::createSound / createStream) and plays it (System::playSound) -- all three through its import table, which is hooked
 // here (iat_hook.h: one pointer each, nothing of the game's code changed). Henry's lines are the files of his voice actor,
 // "tmck_*.ogg" (43,284 of the German files). FMOD Studio plays the voice lines itself (programmer sounds, through fmodstudio.dll's
-// own playSound import, hooked too), so each of Henry's lines gets FMOD's own pitch shifter on its channel
-// (FMOD_DSP_TYPE_PITCHSHIFT: the pitch, not the speed), released when the line ends. Every other sound is untouched. Preset 0 plays
-// Henry's lines as before.
+// own playSound import, hooked too), so each of Henry's lines gets a voice filter of ours on its channel (a custom FMOD DSP running
+// voice_shift.h, a TD-PSOLA: the pitch moved by P, the formants only by Q -- FMOD's own pitch shifter moves both and makes a man sound like a
+// small creature), released when the line ends. Every other sound is untouched. Preset 0 plays Henry's lines as before. The
+// research verb "vtune <P> <Q> [lift]" sets the active preset's values live (for tuning by ear), "vtune off" goes back to the table.
 #include "fs_voice.h"
+#include "voice_shift.h"
 #include "iat_hook.h"
 #include "wo203.h"
 #include "wo163.h"
@@ -20,6 +22,8 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
+#include <new>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
@@ -43,20 +47,31 @@ using ChanRemoveDspFn = int (*)(void* channel, void* dsp);
 using ChanPlayingFn = int (*)(void* channel, int* playing);
 using ChanSoundFn = int (*)(void* channel, void** sound);
 using DspReleaseFn = int (*)(void* dsp);
+using CreateCustomFn = int (*)(void* sys, const void* desc, void** dsp);
+
+// FMOD 2.02 plug-in SDK (fmod_dsp.h): the description of a DSP of our own, and the head of the state FMOD hands its callbacks
+struct DspState { void* instance; void* plugindata; };
+using DspCb = int (*)(DspState*);
+using DspReadCb = int (*)(DspState*, float* in, float* out, unsigned len, int inch, int* outch);
+struct DspDesc {
+    unsigned pluginsdkversion; char name[32]; unsigned version; int numinputbuffers, numoutputbuffers;
+    DspCb create, release, reset; DspReadCb read; void* process; void* setposition;
+    int numparameters; void** paramdesc;
+    void *setfloat, *setint, *setbool, *setdata, *getfloat, *getint, *getbool, *getdata, *shouldiprocess;
+    void* userdata; void *sys_register, *sys_deregister, *sys_mix;
+};
+constexpr unsigned kPluginSdk = 110;   // FMOD_PLUGIN_SDK_VERSION (2.02)
 
 constexpr const char* kImporter = "CryAudioImplFmod.dll";
 constexpr const char* kFmod = "fmod.dll";
 constexpr const char* kSymCreateSound = "?createSound@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDIPEAUFMOD_CREATESOUNDEXINFO@@PEAPEAVSound@2@@Z";
 constexpr const char* kSymCreateStream = "?createStream@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDIPEAUFMOD_CREATESOUNDEXINFO@@PEAPEAVSound@2@@Z";
 constexpr const char* kSymPlay = "?playSound@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAVSound@2@PEAVChannelGroup@2@_NPEAPEAVChannel@2@@Z";
-constexpr int kDspPitchShift = 13;                 // FMOD_DSP_TYPE_PITCHSHIFT (2.02)
-constexpr int kParamPitch = 0, kParamFftSize = 1;  // FMOD_DSP_PITCHSHIFT_PITCH / _FFTSIZE
 constexpr unsigned kOpenNotAName = 0x8 | 0x800 | 0x10000000;   // FMOD_OPENUSER | FMOD_OPENMEMORY | FMOD_OPENMEMORY_POINT: no file name
 
 CreateFn g_origSound = nullptr, g_origStream = nullptr;
 PlayFn g_origPlay = nullptr;
-CreateDspFn g_createDsp = nullptr;
-SetParamFn g_setParam = nullptr;
+CreateCustomFn g_createCustom = nullptr;
 AddDspFn g_addDsp = nullptr;
 CreateGroupFn g_createGroup = nullptr;
 AddGroupFn g_addGroup = nullptr;
@@ -77,15 +92,49 @@ std::unordered_set<void*> g_henry;                 // sounds made from Henry's v
 std::atomic<uint32_t> c_henryMade{0}, c_henryPlayed{0}, c_rerouted{0}, c_groupFail{0};   // rerouted = lines shifted
 std::string g_why = "not installed";
 
-float pitch_of(int p) {
-    switch (p) {
-        case 1: return 1.12f;   // a little higher
-        case 2: return 1.26f;   // a woman's range
-        case 3: return 1.40f;   // brighter
-        case 4: return 0.89f;   // deeper
-        default: return 1.0f;
-    }
+// The presets: pitch P, formants Q (lift: unused by the PSOLA filter). 0 is Henry as recorded; 1 a woman (Henry's ~137 Hz to ~215 Hz,
+// chosen by ear against the WORLD vocoder's rendering), 2 brighter, 3 warmer, 4 deeper.
+struct Tune { float P, Q; int lift; };
+constexpr Tune kTable[5] = {{1.0f, 1.0f, 90}, {1.57f, 1.20f, 90}, {1.68f, 1.25f, 90}, {1.46f, 1.15f, 90}, {0.85f, 0.95f, 90}};
+std::atomic<float> g_P{1.0f}, g_Q{1.0f};
+std::atomic<int> g_lift{90};
+std::atomic<bool> g_tuned{false};             // "vtune": the values are set by hand, not the table's
+std::atomic<uint32_t> c_blocks{0};
+
+void load_tune(int p) {
+    if (g_tuned.load()) return;
+    const Tune& t = kTable[p >= 0 && p <= 4 ? p : 0];
+    g_P = t.P; g_Q = t.Q; g_lift = t.lift;
 }
+
+// The DSP's callbacks (FMOD's mixer thread): one Shifter per line (~200 KB), mono (Henry's lines are mono; a wider input is mixed down and
+// the result written to every channel).
+int dsp_create(DspState* s) { s->plugindata = new (std::nothrow) voiceshift::Shifter(); return s->plugindata ? 0 : 38 /* FMOD_ERR_MEMORY */; }
+int dsp_release(DspState* s) { delete static_cast<voiceshift::Shifter*>(s->plugindata); s->plugindata = nullptr; return 0; }
+int dsp_reset(DspState* s) { if (auto* sh = static_cast<voiceshift::Shifter*>(s->plugindata)) sh->reset(); return 0; }
+int dsp_read(DspState* s, float* in, float* out, unsigned len, int inch, int* outch) {
+    auto* sh = static_cast<voiceshift::Shifter*>(s->plugindata);
+    const int oc = outch && *outch > 0 ? *outch : inch;
+    if (!sh || inch <= 0 || oc <= 0) { if (oc > 0) std::memset(out, 0, sizeof(float) * len * oc); return 0; }
+    float mono[1024], res[1024];
+    for (unsigned base = 0; base < len; base += 1024) {
+        const unsigned n = len - base < 1024 ? len - base : 1024;
+        for (unsigned i = 0; i < n; ++i) { float a = 0; for (int c = 0; c < inch; ++c) a += in[(base + i) * inch + c]; mono[i] = a / inch; }
+        sh->process(mono, res, static_cast<int>(n), g_P.load(), g_Q.load(), g_lift.load(), 48000.0f);
+        for (unsigned i = 0; i < n; ++i) for (int c = 0; c < oc; ++c) out[(base + i) * oc + c] = res[i];
+    }
+    c_blocks.fetch_add(1, std::memory_order_relaxed);
+    return 0;
+}
+DspDesc make_desc() {
+    DspDesc d{};
+    d.pluginsdkversion = kPluginSdk;
+    std::strncpy(d.name, "KCDMP voice", sizeof d.name - 1);
+    d.version = 1; d.numinputbuffers = 1; d.numoutputbuffers = 1;
+    d.create = &dsp_create; d.release = &dsp_release; d.reset = &dsp_reset; d.read = &dsp_read;
+    return d;
+}
+const DspDesc kDesc = make_desc();
 
 // A file name the sound was made from: its "tmck_" marks Henry's voice actor. Read under the fault guard (the name is the game's).
 bool henry_name(const char* name, unsigned mode) {
@@ -127,9 +176,7 @@ int hk_stream(void* sys, const char* name, unsigned mode, void* exinfo, void** s
 void shift(void* sys, void* sound, void** channel) {
     if (!channel || !*channel || g_preset.load() == 0) return;
     void* dsp = nullptr;
-    if (g_createDsp(sys, kDspPitchShift, &dsp) != 0 || !dsp) { c_groupFail.fetch_add(1); return; }
-    g_setParam(dsp, kParamFftSize, 2048.0f);
-    g_setParam(dsp, kParamPitch, pitch_of(g_preset.load()));
+    if (g_createCustom(sys, &kDesc, &dsp) != 0 || !dsp) { c_groupFail.fetch_add(1); return; }
     if (g_chanAdd(*channel, 0, dsp) != 0) { g_dspRelease(dsp); c_groupFail.fetch_add(1); return; }
     c_rerouted.fetch_add(1);
     std::lock_guard<std::mutex> lk(g_lock);
@@ -173,8 +220,7 @@ void tick() {
 void install() {
     HMODULE imp = GetModuleHandleA(kImporter), fm = GetModuleHandleA(kFmod);
     if (!imp || !fm) { g_why = "CryAudioImplFmod.dll / fmod.dll not loaded"; logf("FS-VOICE not armed: %s", g_why.c_str()); return; }
-    g_createDsp = reinterpret_cast<CreateDspFn>(GetProcAddress(fm, "FMOD_System_CreateDSPByType"));
-    g_setParam = reinterpret_cast<SetParamFn>(GetProcAddress(fm, "FMOD_DSP_SetParameterFloat"));
+    g_createCustom = reinterpret_cast<CreateCustomFn>(GetProcAddress(fm, "FMOD_System_CreateDSP"));
     g_addDsp = reinterpret_cast<AddDspFn>(GetProcAddress(fm, "FMOD_ChannelGroup_AddDSP"));
     g_createGroup = reinterpret_cast<CreateGroupFn>(GetProcAddress(fm, "FMOD_System_CreateChannelGroup"));
     g_addGroup = reinterpret_cast<AddGroupFn>(GetProcAddress(fm, "FMOD_ChannelGroup_AddGroup"));
@@ -184,7 +230,7 @@ void install() {
     g_chanPlaying = reinterpret_cast<ChanPlayingFn>(GetProcAddress(fm, "FMOD_Channel_IsPlaying"));
     g_chanSound = reinterpret_cast<ChanSoundFn>(GetProcAddress(fm, "FMOD_Channel_GetCurrentSound"));
     g_dspRelease = reinterpret_cast<DspReleaseFn>(GetProcAddress(fm, "FMOD_DSP_Release"));
-    if (!g_createDsp || !g_setParam || !g_chanAdd || !g_chanRemove || !g_chanPlaying || !g_chanSound || !g_dspRelease) { g_why = "an FMOD export is missing"; logf("FS-VOICE not armed: %s", g_why.c_str()); return; }
+    if (!g_createCustom || !g_chanAdd || !g_chanRemove || !g_chanPlaying || !g_chanSound || !g_dspRelease) { g_why = "an FMOD export is missing"; logf("FS-VOICE not armed: %s", g_why.c_str()); return; }
     // all three or none: a half-hooked set would mark sounds it never plays (or play sounds it never saw made)
     void* s = hook_iat(imp, kFmod, kSymCreateSound, reinterpret_cast<void*>(&hk_sound));
     if (!s) { g_why = "createSound not in the import table"; logf("FS-VOICE not armed: %s", g_why.c_str()); return; }
@@ -206,17 +252,15 @@ void install() {
     if (!g_origPlayStudio) logf("FS-VOICE: fmodstudio.dll's playSound not hooked (its lines keep their pitch)");
     g_armed = true;
     g_why.clear();
-    logf("FS-VOICE armed: %s's createSound / createStream / playSound hooked (FMOD pitch shifter for the player's own voice)", kImporter);
+    logf("FS-VOICE armed: %s's createSound / createStream / playSound hooked (voice filter for the player's own voice)", kImporter);
 }
 
 void apply(int p) {
     g_preset = p;
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        for (auto& a : g_active) g_setParam(a.dsp, kParamPitch, pitch_of(p));
-    }
-    logf("FS-VOICE preset %d (pitch %.2f) armed=%d henry_sounds=%u played=%u rerouted=%u group_failures=%u", p, pitch_of(p), g_armed.load() ? 1 : 0,
-         c_henryMade.load(), c_henryPlayed.load(), c_rerouted.load(), c_groupFail.load());
+    load_tune(p);   // lines already playing take the new values at once (the DSP reads them per block)
+    logf("FS-VOICE preset %d (P %.2f Q %.2f lift %d%s) armed=%d henry_sounds=%u played=%u rerouted=%u group_failures=%u blocks=%u", p, g_P.load(),
+         g_Q.load(), g_lift.load(), g_tuned.load() ? " by hand" : "", g_armed.load() ? 1 : 0, c_henryMade.load(), c_henryPlayed.load(),
+         c_rerouted.load(), c_groupFail.load(), c_blocks.load());
 }
 
 uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
@@ -229,9 +273,11 @@ uint8_t op(uint8_t opc, const uint8_t* body, size_t len, uint8_t* out, size_t ca
 }
 
 int status(char* out, int n) {
-    return std::snprintf(out, static_cast<size_t>(n), "fsvoice armed=%d%s%s preset=%d henry_sounds=%u played=%u shifted=%u live=%zu",
-                         g_armed.load() ? 1 : 0, g_why.empty() ? "" : " why=", g_why.c_str(), g_preset.load(), c_henryMade.load(), c_henryPlayed.load(),
-                         c_rerouted.load(), g_active.size());
+    return std::snprintf(out, static_cast<size_t>(n),
+                         "fsvoice armed=%d%s%s preset=%d P=%.2f Q=%.2f lift=%d%s henry_sounds=%u played=%u shifted=%u live=%zu blocks=%u",
+                         g_armed.load() ? 1 : 0, g_why.empty() ? "" : " why=", g_why.c_str(), g_preset.load(), g_P.load(), g_Q.load(),
+                         g_lift.load(), g_tuned.load() ? " by-hand" : "", c_henryMade.load(), c_henryPlayed.load(), c_rerouted.load(),
+                         g_active.size(), c_blocks.load());
 }
 
 const bool kReg = wo203::reg_install("fsvoice", &install) && wo203::reg_op(kOpVoice, &op) && wo203::reg_status("fsvoice", &status)
@@ -240,5 +286,15 @@ const bool kReg = wo203::reg_install("fsvoice", &install) && wo203::reg_op(kOpVo
 }  // namespace
 
 void set_preset(int p) { if (p >= 0 && p <= 4) apply(p); }
+
+void research_tune(const char* a1, const char* rest) {
+    if (!a1 || !std::strcmp(a1, "off")) { g_tuned = false; load_tune(g_preset.load()); logf("FS-VOICE tune: back to the table"); return; }
+    float P = static_cast<float>(std::atof(a1)), Q = 1.0f;
+    int lift = 90;
+    if (rest && *rest) std::sscanf(rest, "%f %d", &Q, &lift);
+    if (!(P >= 0.5f && P <= 2.5f) || !(Q >= 0.5f && Q <= 2.0f)) { logf("FS-VOICE tune: out of range (P 0.5-2.5, Q 0.5-2.0)"); return; }
+    g_P = P; g_Q = Q; g_lift = lift; g_tuned = true;
+    logf("FS-VOICE tune by hand: P %.2f Q %.2f lift %d (preset %d)", P, Q, lift, g_preset.load());
+}
 
 }  // namespace kcdmp::fsvoice

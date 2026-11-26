@@ -7,8 +7,9 @@
 
 namespace kcdmp::fsvoice {
 
-// [op][preset:1] 0 off (Henry as recorded), 1 a little higher, 2 a woman's range, 3 brighter, 4 deeper. Reply [armed 0/1].
+// [op][preset:1] 0 off (Henry as recorded), 1 a woman, 2 a woman brighter, 3 a woman warmer, 4 deeper. Reply [armed 0/1].
 constexpr uint8_t kOpVoice = 243;
 void set_preset(int p);   // the research verb "voice <n>" (and the op): logs the counters too
+void research_tune(const char* p, const char* rest);   // the research verb "vtune <P> <Q> [lift]" | "vtune off"
 
 }  // namespace kcdmp::fsvoice

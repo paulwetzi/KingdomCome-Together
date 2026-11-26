@@ -1258,6 +1258,7 @@ void research_watch() {
         else if (!std::strcmp(verb, "stances")) { for (int i = 0; i < 8; ++i) logf("WO141-R stance %d = %s", i, stance_label(i)); }
         else if (k >= 2 && !std::strcmp(verb, "unst")) logf("WO141-R unstance '%s' = %d", a1, unstance_id(a1));
         else if (k >= 2 && !std::strcmp(verb, "voice")) fsvoice::set_preset(atoi(a1));   // fixed-soul research: voice <0..4>
+        else if (k >= 2 && !std::strcmp(verb, "vtune")) fsvoice::research_tune(a1, k >= 3 ? rest : "");   // vtune <P> <Q> [lift] | off
         else if (k >= 2 && !std::strcmp(verb, "self")) fsself::research_set(a1);   // fixed-soul research: self <body>|off
         else if (k >= 2 && !std::strcmp(verb, "selfahead")) fsself::research_ahead(static_cast<float>(atof(a1)));
         else if (k >= 2 && !std::strcmp(verb, "attach")) {   // fixed-soul research: attach <entity name> -- its character's attachments
