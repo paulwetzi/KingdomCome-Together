@@ -16,5 +16,7 @@ namespace kcdmp::fsself {
 constexpr uint8_t kOpSelf = 241;
 // [op][nameLen:1][name] -- the attachment names of that body's character, comma-joined (reply text, at most ~3 KB).
 constexpr uint8_t kOpAttachNames = 242;
+void research_set(const char* name);   // the research verb "self <body>|off"
+void research_ahead(float m);          // the research verb "selfahead <m>" (0 = in place)
 
 }  // namespace kcdmp::fsself

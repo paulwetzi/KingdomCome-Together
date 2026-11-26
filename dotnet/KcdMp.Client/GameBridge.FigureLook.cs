@@ -103,6 +103,46 @@ public partial class GameBridge
         await ExecLuaAsync($"if KCD2MP_FsSelfLook then KCD2MP_FsSelfLook(\"{EscapeLua(soul)}\",\"{EscapeLua(guid)}\",\"{EscapeLua(cls)}\") end");
     }
 
+    // Fixed-soul build: the own voice. The preset is this player's (mod-settings.json "VoicePreset"); the DLL shifts Henry's lines
+    // (native fs_voice.cpp, op 243). Pushed again every 10 s: a new game or DLL starts at "off".
+    private static readonly string[] FsVoicePresets = { "off", "higher", "woman", "bright", "deeper" };
+    private const string FsVoiceSetting = "VoicePreset";
+    private string? _fsVoice;
+    private long _fsVoiceSentMs;
+    private async Task FsVoiceTickAsync(bool force = false)
+    {
+        if (_fsVoice is null)
+        {
+            var node = SettingsJson.Read(W154mModSettings)?[FsVoiceSetting];
+            string saved = node?.GetValueKind() == System.Text.Json.JsonValueKind.String ? node.GetValue<string>() : "off";
+            _fsVoice = Array.IndexOf(FsVoicePresets, saved) >= 0 ? saved : "off";
+            force = true;
+        }
+        if (!force && Environment.TickCount64 - _fsVoiceSentMs < 10_000) return;
+        _fsVoiceSentMs = Environment.TickCount64;
+        bool armed = false;
+        try
+        {
+            var r = await _combat.Wo163Async(Protocol.FsOpVoice, [(byte)Array.IndexOf(FsVoicePresets, _fsVoice)]);
+            armed = r is { Ok: true, Payload.Length: >= 1 } x && x.Payload[0] == 1;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Console.WriteLine($"FS-VOICE: {ex.Message}"); }
+        await ExecLuaAsync($"if KCD2MP_FsVoiceState then KCD2MP_FsVoiceState(\"{_fsVoice}\", {(armed ? "true" : "false")}) end");
+    }
+
+    /// <summary><c>fs_voice next|&lt;preset&gt;</c> from the menu: the next preset (or that one), kept and applied at once.</summary>
+    private async Task FsVoiceOnEventAsync(string? arg)
+    {
+        string w = (arg ?? "").Trim();
+        if (_fsVoice is null) await FsVoiceTickAsync();
+        string next = w == "next" ? FsVoicePresets[(Array.IndexOf(FsVoicePresets, _fsVoice ?? "off") + 1) % FsVoicePresets.Length] : w;
+        if (Array.IndexOf(FsVoicePresets, next) < 0) return;
+        _fsVoice = next;
+        var saved = SettingsJson.Update(W154mModSettings, new[] { SettingsJson.Edit.Set(FsVoiceSetting, JsonValue.Create(next)) }, createIfMissing: true);
+        Console.WriteLine($"FS-VOICE preset {next} (saved: {saved.Outcome.ToString().ToLowerInvariant()})");
+        await FsVoiceTickAsync(force: true);
+    }
+
     private Task FigureErrorAsync(string text) =>
         ExecLuaAsync($"if KCD2MP_FigureError then KCD2MP_FigureError(\"{EscapeLua(text)}\") end");
 
@@ -122,6 +162,7 @@ public partial class GameBridge
             }
         }
         await FsSelfLookTickAsync();
+        await FsVoiceTickAsync();
         if (_myFigure is not null && Environment.TickCount64 - Interlocked.Read(ref _figureSentMs) >= FigureResendMs)
             await FigureSendAsync("heartbeat");
     }

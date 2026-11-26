@@ -6104,6 +6104,9 @@ public partial class GameBridge(ClientConfig config)
             case "fs_self":          // fixed-soul build: on|off <body> -- the own figure's copy follows the player
                 _ = FsSelfAsync(arg);
                 return;
+            case "fs_voice":         // fixed-soul build: next|<preset> -- the own voice
+                _ = FsVoiceOnEventAsync(arg);
+                return;
             case "fs_attach":        // fixed-soul build: <body> -- its attachment names back to the mod
                 _ = FsAttachAsync(arg);
                 return;

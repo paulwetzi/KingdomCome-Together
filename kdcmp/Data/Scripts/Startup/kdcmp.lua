@@ -22083,7 +22083,9 @@ function KCD2MP_FsSelfTick(gen)
     -- tell); every other camera away from his eyes too (the death camera)
     local talking = false
     pcall(function() talking = player.human:IsInDialog() == true end)
-    local view = (talking or KCD2MP.cutsceneActive == true or not fssOwnEyes()) and "other" or "own"
+    -- the camera away from the eyes counts after 3 ticks in a row (a teleport moves it for a moment)
+    if fssOwnEyes() then S.farTicks = 0 else S.farTicks = (S.farTicks or 0) + 1 end
+    local view = (talking or KCD2MP.cutsceneActive == true or S.farTicks >= 3) and "other" or "own"
     if view == "own" then
         pcall(function() player:DrawSlot(0, 1) end)
         for _, n in ipairs(pname and S.names[pname] or {}) do
@@ -22105,6 +22107,18 @@ function KCD2MP_FsSelfStart()
     S.running = true
     S.gen = S.gen + 1
     KCD2MP_FsSelfTick(S.gen)
+end
+
+-- ===== Fixed-soul build: the own voice (the agent keeps the preset, the DLL shifts Henry's lines) ==================================
+KCD2MP.fsVoice = KCD2MP.fsVoice or { preset = "off" }
+local FSV_NAMES = { off = "Henry (off)", higher = "Higher", woman = "Woman", bright = "Bright", deeper = "Deeper" }
+function KCD2MP_FsVoiceName(word) return FSV_NAMES[tostring(word)] or tostring(word) end
+-- The agent: the preset in use ("off", "higher", "woman", "bright", "deeper"); armed = whether the DLL could hook the voice.
+function KCD2MP_FsVoiceState(word, armed)
+    KCD2MP.fsVoice.preset = FSV_NAMES[tostring(word)] and tostring(word) or "off"
+    KCD2MP.fsVoice.armed = armed == true
+    mp_log("FS-VOICE preset=" .. KCD2MP.fsVoice.preset .. " armed=" .. tostring(KCD2MP.fsVoice.armed))
+    return true
 end
 
 -- ===== Fixed-soul build: a partner really sits on the stand-in horse=============================================================
@@ -28817,6 +28831,8 @@ do
         { id = "own_figure", group = "Display", label = "My figure on my screen", kind = "onoff", save = "OwnFigure",
           cmd = "mp_own_figure", fn = "KCD2MP_SetOwnFigure", get = function() return KCD2MP.fsSelf ~= nil and KCD2MP.fsSelf.on end,
           help = "On: in dialogues and cutscenes you see your chosen figure instead of Henry, and looking down you no longer see Henry's body." },
+        { id = "voice_preset", group = "Display", label = "My voice", kind = "vpreset", get = function() return KCD2MP.fsVoice ~= nil and KCD2MP.fsVoice.preset or "off" end,
+          help = "Henry's own voice lines, higher: Higher, Woman, Bright -- or Deeper. Only you hear it. End steps to the next one." },
         { id = "friendly_fire", group = "Gameplay", label = "Friendly fire", kind = "onoff", host = true, save = "FriendlyFire",
           cmd = "mp_friendly_fire", fn = "KCD2MP_Wo121SetFriendlyFire",
           get = function() return KCD2MP.w121 ~= nil and KCD2MP.w121.friendlyFire end,
@@ -28934,6 +28950,7 @@ do
             return name .. " (saving...)"
         end
         if it.kind == "info" then return tostring(v) end
+        if it.kind == "vpreset" then return KCD2MP_FsVoiceName(v) end   -- fixed-soul build: the own voice
         return nil
     end
 
@@ -29008,6 +29025,11 @@ do
             return false
         end
         M.stats.changes = M.stats.changes + 1
+        if it.kind == "vpreset" then   -- fixed-soul build: the agent steps to the next preset, keeps it and tells the DLL
+            KCD2MP_EmitEvent("fs_voice", "next")
+            mp_log("MP-MENU voice_preset next (by menu)")
+            return true
+        end
         if it.kind == "onoff" or it.kind == "crime" then
             local want = not (v == true)
             local arg = (it.kind == "crime") and (want and "joint" or "individual") or onoff(want)

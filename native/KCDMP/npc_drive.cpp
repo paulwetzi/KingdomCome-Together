@@ -1105,6 +1105,13 @@ bool parse_bind(const uint8_t* body, size_t len, BindRequest* out) {
 }
 
 // ---- main thread --------------------------------------------------------------
+// kcd2mp_<digits>: a player's figure (a partner's, or this player's own copy)
+static bool figure_name(const char* n) {
+    if (!n || _strnicmp(n, "kcd2mp_", 7) != 0 || !n[7]) return false;
+    for (const char* d = n + 7; *d; ++d) if (*d < '0' || *d > '9') return false;
+    return true;
+}
+
 uint8_t bind_main(const BindRequest& req) {
     const std::string key = lower(req.name);
     if (!req.on) {
@@ -1161,7 +1168,9 @@ uint8_t bind_main(const BindRequest& req) {
     }
     if (noPhys) c_bindNoPhys.fetch_add(1, std::memory_order_relaxed);
     if (parent) c_bindParented.fetch_add(1, std::memory_order_relaxed);
-    if (g_bound.find(key) == g_bound.end() && g_bound.size() >= kMaxBound) return refuse(kTableFull, "");
+    // fixed-soul build: a player's figure (a partner's, or this player's own copy: kcd2mp_<digits>) is never refused for a full table --
+    // in a crowded town the NPCs held all 160 rows and the own copy waited 11 s for one; there are only a few such figures
+    if (g_bound.find(key) == g_bound.end() && g_bound.size() >= kMaxBound && !figure_name(req.name)) return refuse(kTableFull, "");
 
     const double now = now_s();
     // WO-214 B (one_bind): a bind asked again for a body bound to that same entity changes nothing -- the field re-bound bound bodies

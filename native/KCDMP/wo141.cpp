@@ -3,6 +3,8 @@
 // content belong to Warhorse Studios and PLAION. Unofficial, free, not affiliated with or endorsed by them.
 #include "wo141.h"
 #include "motion.h"
+#include "fs_voice.h"
+#include "fs_self.h"
 #include "wo208.h"
 #include "wo209.h"
 #include "wo209_rules.h"
@@ -1255,6 +1257,9 @@ void research_watch() {
         else if (!std::strcmp(verb, "captureon")) { g_captureNpcs = true; g_capturePlayer = true; logf("WO141-R capture on (research)"); }
         else if (!std::strcmp(verb, "stances")) { for (int i = 0; i < 8; ++i) logf("WO141-R stance %d = %s", i, stance_label(i)); }
         else if (k >= 2 && !std::strcmp(verb, "unst")) logf("WO141-R unstance '%s' = %d", a1, unstance_id(a1));
+        else if (k >= 2 && !std::strcmp(verb, "voice")) fsvoice::set_preset(atoi(a1));   // fixed-soul research: voice <0..4>
+        else if (k >= 2 && !std::strcmp(verb, "self")) fsself::research_set(a1);   // fixed-soul research: self <body>|off
+        else if (k >= 2 && !std::strcmp(verb, "selfahead")) fsself::research_ahead(static_cast<float>(atof(a1)));
         else if (k >= 2 && !std::strcmp(verb, "attach")) {   // fixed-soul research: attach <entity name> -- its character's attachments
             void* ae = entity_by_name(a1);
             if (ae) motion::attach_list(ae, a1); else logf("FS-ATTACH %s: no such entity", a1);

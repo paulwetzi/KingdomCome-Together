@@ -75,6 +75,8 @@ public static partial class Protocol
     public const byte FsOpSelf = 241;
     /// <summary>Fixed-soul build: a body's attachment names, comma-joined.</summary>
     public const byte FsOpAttachNames = 242;
+    /// <summary>Fixed-soul build: the own voice preset (0 off .. 4), native fs_voice.h.</summary>
+    public const byte FsOpVoice = 243;
     // ---- host kinds (APPEND-ONLY) ----
     public const byte CrimeHostJudged = 1, CrimeHostStop = 2, CrimeHostPursue = 3, CrimeHostRecord = 4,
                       CrimeHostHorses = 5, CrimeHostCleared = 6, CrimeHostMode = 7, CrimeHostShops = 8,
